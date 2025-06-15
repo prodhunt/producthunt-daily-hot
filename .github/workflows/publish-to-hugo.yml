@@ -95,8 +95,24 @@ jobs:
         if: steps.commit_changes.outputs.has_changes == 'true'
         run: |
           cd hugo-site
-          git push
-          echo "🚀 成功推送到 Hugo 仓库"
+
+          # 检查 HUGO_PUSH_TOKEN 权限
+          if [ -z "${{ secrets.HUGO_PUSH_TOKEN }}" ]; then
+            echo "❌ HUGO_PUSH_TOKEN 未配置"
+            exit 1
+          fi
+
+          # 使用 HUGO_PUSH_TOKEN 推送
+          echo "🔑 使用 HUGO_PUSH_TOKEN 推送到 Hugo 仓库..."
+          git remote set-url origin https://${{ secrets.HUGO_PUSH_TOKEN }}@github.com/hugoflow/producthunt-daily-stack.git
+
+          if git push origin main; then
+            echo "🚀 成功推送到 Hugo 仓库"
+          else
+            echo "❌ 推送失败，请检查 HUGO_PUSH_TOKEN 权限"
+            echo "确保 Token 对应的用户对 hugoflow/producthunt-daily-stack 有写入权限"
+            exit 1
+          fi
 
       - name: 发布总结
         run: |

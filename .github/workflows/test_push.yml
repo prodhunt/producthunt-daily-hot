@@ -1,0 +1,287 @@
+name: Test Push Permissions
+
+on:
+  workflow_dispatch:  # 仅手动触发
+    inputs:
+      test_message:
+        description: '测试消息（可选）'
+        required: false
+        default: 'Test push verification'
+        type: string
+
+permissions:
+  contents: write  # 允许推送到仓库
+  actions: write   # 允许触发其他工作流
+
+jobs:
+  test_push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: 环境信息检查
+      run: |
+        echo "🔍 环境信息检查"
+        echo "================================"
+        echo "仓库: ${{ github.repository }}"
+        echo "分支: ${{ github.ref }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "事件: ${{ github.event_name }}"
+        echo "工作目录: $(pwd)"
+        echo "Git 状态: $(git status --short || echo '无变更')"
+        echo "================================"
+
+    - name: 检查 Secrets 配置
+      run: |
+        echo "🔑 检查 Secrets 配置"
+        echo "================================"
+        
+        if [ -n "${{ secrets.PAT }}" ]; then
+          echo "✅ PAT Secret 已配置"
+          echo "PAT 长度: ${#PAT_VALUE} 字符"
+        else
+          echo "❌ PAT Secret 未配置"
+        fi
+        
+        if [ -n "${{ github.token }}" ]; then
+          echo "✅ GITHUB_TOKEN 可用"
+        else
+          echo "❌ GITHUB_TOKEN 不可用"
+        fi
+        
+        echo "================================"
+      env:
+        PAT_VALUE: ${{ secrets.PAT }}
+
+    - name: 创建测试文件
+      run: |
+        echo "📝 创建测试文件"
+        echo "================================"
+        
+        # 确保 data 目录存在
+        mkdir -p data
+        
+        # 创建测试文件
+        TEST_FILE="data/push-test-$(date '+%Y%m%d-%H%M%S').md"
+        
+        cat > "$TEST_FILE" << EOF
+        # 推送测试文件
+        
+        ## 测试信息
+        - **创建时间**: $(date)
+        - **工作流**: ${{ github.workflow }}
+        - **运行ID**: ${{ github.run_id }}
+        - **测试消息**: ${{ github.event.inputs.test_message }}
+        - **触发者**: ${{ github.actor }}
+        
+        ## 环境信息
+        - **仓库**: ${{ github.repository }}
+        - **分支**: ${{ github.ref }}
+        - **提交SHA**: ${{ github.sha }}
+        
+        ## 测试目的
+        此文件用于验证 GitHub Actions 的推送权限是否正常工作。
+        
+        ---
+        *此文件由 GitHub Actions 自动生成，用于测试目的*
+        EOF
+        
+        echo "✅ 测试文件已创建: $TEST_FILE"
+        echo "文件内容预览:"
+        echo "--------------------------------"
+        head -10 "$TEST_FILE"
+        echo "--------------------------------"
+        echo "文件大小: $(wc -l < "$TEST_FILE") 行"
+
+    - name: 检查文件变更
+      id: check_changes
+      run: |
+        echo "🔍 检查文件变更"
+        echo "================================"
+        
+        # 检查 Git 状态
+        git status --porcelain
+        
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "✅ 检测到文件变更"
+          echo "变更的文件:"
+          git status --short
+        else
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ 没有文件变更"
+        fi
+        
+        echo "================================"
+
+    - name: 配置 Git 用户
+      if: steps.check_changes.outputs.has_changes == 'true'
+      run: |
+        echo "⚙️ 配置 Git 用户信息"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        echo "✅ Git 用户配置完成"
+
+    - name: 提交变更
+      if: steps.check_changes.outputs.has_changes == 'true'
+      id: commit
+      run: |
+        echo "📝 提交变更"
+        echo "================================"
+        
+        # 添加文件
+        git add .
+        
+        # 提交变更
+        COMMIT_MESSAGE="🧪 Test push: ${{ github.event.inputs.test_message }} ($(date '+%Y-%m-%d %H:%M:%S UTC'))"
+        git commit -m "$COMMIT_MESSAGE"
+        
+        echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "✅ 变更已提交"
+        echo "提交信息: $COMMIT_MESSAGE"
+        echo "提交SHA: $(git rev-parse HEAD)"
+        echo "================================"
+
+    - name: 推送变更 (使用 PAT)
+      if: steps.check_changes.outputs.has_changes == 'true' && secrets.PAT != ''
+      id: push_pat
+      run: |
+        echo "🚀 使用 PAT 推送变更"
+        echo "================================"
+        
+        # 使用 PAT 推送
+        if git push https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:main; then
+          echo "push_success=true" >> $GITHUB_OUTPUT
+          echo "push_method=PAT" >> $GITHUB_OUTPUT
+          echo "✅ 使用 PAT 推送成功"
+        else
+          echo "push_success=false" >> $GITHUB_OUTPUT
+          echo "❌ 使用 PAT 推送失败"
+          exit 1
+        fi
+        
+        echo "================================"
+
+    - name: 推送变更 (使用 GITHUB_TOKEN)
+      if: steps.check_changes.outputs.has_changes == 'true' && secrets.PAT == '' 
+      id: push_token
+      run: |
+        echo "🚀 使用 GITHUB_TOKEN 推送变更"
+        echo "================================"
+        
+        # 使用 GITHUB_TOKEN 推送
+        if git push https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:main; then
+          echo "push_success=true" >> $GITHUB_OUTPUT
+          echo "push_method=GITHUB_TOKEN" >> $GITHUB_OUTPUT
+          echo "✅ 使用 GITHUB_TOKEN 推送成功"
+        else
+          echo "push_success=false" >> $GITHUB_OUTPUT
+          echo "❌ 使用 GITHUB_TOKEN 推送失败"
+          exit 1
+        fi
+        
+        echo "================================"
+
+    - name: 测试 Hugo 工作流触发 (可选)
+      if: success() && steps.check_changes.outputs.has_changes == 'true'
+      continue-on-error: true  # 即使失败也继续
+      run: |
+        echo "🔗 测试 Hugo 工作流触发"
+        echo "================================"
+        
+        if [ -n "${{ secrets.PAT }}" ]; then
+          echo "尝试触发 Hugo 发布工作流..."
+          
+          curl -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.PAT }}" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d '{
+              "event_type": "content-generated",
+              "client_payload": {
+                "triggered_by": "test_push",
+                "test_mode": true,
+                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                "commit_sha": "${{ steps.commit.outputs.commit_sha }}"
+              }
+            }'
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Hugo 工作流触发成功"
+          else
+            echo "⚠️ Hugo 工作流触发失败（这是可选步骤）"
+          fi
+        else
+          echo "⚠️ 跳过 Hugo 工作流触发（缺少 PAT）"
+        fi
+        
+        echo "================================"
+
+    - name: 测试结果总结
+      if: always()
+      run: |
+        echo "## 📊 推送测试结果" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 基本信息" >> $GITHUB_STEP_SUMMARY
+        echo "- **测试时间**: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "- **仓库**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **分支**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **触发者**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **测试消息**: ${{ github.event.inputs.test_message }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 配置检查" >> $GITHUB_STEP_SUMMARY
+        if [ -n "${{ secrets.PAT }}" ]; then
+          echo "- ✅ PAT Secret 已配置" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ PAT Secret 未配置" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ -n "${{ github.token }}" ]; then
+          echo "- ✅ GITHUB_TOKEN 可用" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ GITHUB_TOKEN 不可用" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 执行结果" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.check_changes.outputs.has_changes }}" == "true" ]; then
+          echo "- ✅ 文件变更检测: 成功" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.push_pat.outputs.push_success }}" == "true" ]; then
+            echo "- ✅ 推送结果: 成功 (使用 PAT)" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.push_token.outputs.push_success }}" == "true" ]; then
+            echo "- ✅ 推送结果: 成功 (使用 GITHUB_TOKEN)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ 推送结果: 失败" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "- ℹ️ 没有文件变更，跳过推送" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "🎉 **总体状态**: 测试成功！推送权限正常工作。" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **总体状态**: 测试失败，需要检查权限配置。" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: 清理测试文件 (可选)
+      if: always()
+      continue-on-error: true
+      run: |
+        echo "🧹 清理测试文件"
+        echo "================================"
+        
+        # 可选：删除测试文件（如果不想保留）
+        # find data -name "push-test-*.md" -mtime +1 -delete
+        
+        echo "ℹ️ 测试文件已保留，可手动删除"
+        echo "当前测试文件:"
+        ls -la data/push-test-*.md 2>/dev/null || echo "没有找到测试文件"
+        echo "================================"

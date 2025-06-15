@@ -1,0 +1,280 @@
+name: Test Hugo Repository Permissions
+
+on:
+  workflow_dispatch:  # 仅手动触发
+    inputs:
+      test_message:
+        description: '测试消息（可选）'
+        required: false
+        default: 'Hugo permissions test'
+        type: string
+
+jobs:
+  test_hugo_access:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 环境信息检查
+      run: |
+        echo "🔍 Hugo 权限测试"
+        echo "================================"
+        echo "目标仓库: hugoflow/producthunt-daily-stack"
+        echo "测试时间: $(date)"
+        echo "测试消息: ${{ github.event.inputs.test_message }}"
+        echo "================================"
+
+    - name: 检查 HUGO_PUSH_TOKEN
+      id: check_token
+      run: |
+        echo "🔑 检查 HUGO_PUSH_TOKEN"
+        echo "================================"
+        
+        if [ -z "${{ secrets.HUGO_PUSH_TOKEN }}" ]; then
+          echo "❌ HUGO_PUSH_TOKEN 未配置"
+          echo "token_exists=false" >> $GITHUB_OUTPUT
+          exit 1
+        else
+          echo "✅ HUGO_PUSH_TOKEN 已配置"
+          echo "token_exists=true" >> $GITHUB_OUTPUT
+          echo "Token 长度: ${#TOKEN_VALUE} 字符"
+        fi
+        
+        echo "================================"
+      env:
+        TOKEN_VALUE: ${{ secrets.HUGO_PUSH_TOKEN }}
+
+    - name: 测试 API 访问权限
+      if: steps.check_token.outputs.token_exists == 'true'
+      id: test_api
+      run: |
+        echo "🌐 测试 GitHub API 访问权限"
+        echo "================================"
+        
+        # 测试基本 API 访问
+        echo "测试用户信息..."
+        if curl -s -H "Authorization: token ${{ secrets.HUGO_PUSH_TOKEN }}" \
+                https://api.github.com/user > user_info.json; then
+          
+          username=$(cat user_info.json | grep -o '"login":"[^"]*"' | cut -d'"' -f4)
+          echo "✅ Token 有效，用户: $username"
+          echo "username=$username" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Token 无效或 API 访问失败"
+          echo "api_access=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # 测试目标仓库访问权限
+        echo ""
+        echo "测试目标仓库访问权限..."
+        if curl -s -H "Authorization: token ${{ secrets.HUGO_PUSH_TOKEN }}" \
+                https://api.github.com/repos/hugoflow/producthunt-daily-stack > repo_info.json; then
+          
+          repo_name=$(cat repo_info.json | grep -o '"full_name":"[^"]*"' | cut -d'"' -f4)
+          echo "✅ 可以访问仓库: $repo_name"
+          
+          # 检查权限
+          permissions=$(cat repo_info.json | grep -o '"permissions":{[^}]*}')
+          echo "权限信息: $permissions"
+          
+          if echo "$permissions" | grep -q '"push":true'; then
+            echo "✅ 有推送权限"
+            echo "push_permission=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 没有推送权限"
+            echo "push_permission=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "api_access=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 无法访问目标仓库"
+          echo "api_access=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "================================"
+
+    - name: 测试仓库克隆
+      if: steps.test_api.outputs.api_access == 'true'
+      id: test_clone
+      run: |
+        echo "📥 测试仓库克隆"
+        echo "================================"
+        
+        # 尝试克隆仓库
+        if git clone https://${{ secrets.HUGO_PUSH_TOKEN }}@github.com/hugoflow/producthunt-daily-stack.git hugo-test; then
+          echo "✅ 仓库克隆成功"
+          echo "clone_success=true" >> $GITHUB_OUTPUT
+          
+          cd hugo-test
+          echo "当前分支: $(git branch --show-current)"
+          echo "最新提交: $(git log -1 --oneline)"
+          echo "仓库结构:"
+          ls -la
+          
+          # 检查 content/news 目录
+          if [ -d "content/news" ]; then
+            echo "✅ content/news 目录存在"
+            echo "现有文件数量: $(ls content/news/*.md 2>/dev/null | wc -l)"
+          else
+            echo "⚠️ content/news 目录不存在，将需要创建"
+          fi
+          
+        else
+          echo "❌ 仓库克隆失败"
+          echo "clone_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "================================"
+
+    - name: 测试文件创建和推送
+      if: steps.test_clone.outputs.clone_success == 'true'
+      id: test_push
+      run: |
+        echo "📝 测试文件创建和推送"
+        echo "================================"
+        
+        cd hugo-test
+        
+        # 配置 Git 用户
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # 确保目录存在
+        mkdir -p content/news
+        
+        # 创建测试文件
+        TEST_FILE="content/news/hugo-test-$(date '+%Y%m%d-%H%M%S').md"
+        
+        cat > "$TEST_FILE" << EOF
+        ---
+        title: "Hugo 权限测试文件"
+        date: $(date '+%Y-%m-%d')
+        description: "此文件用于测试 Hugo 仓库的推送权限"
+        tags: ["测试", "权限验证"]
+        keywords: ["Hugo", "GitHub Actions", "权限测试"]
+        ---
+        
+        # Hugo 权限测试
+        
+        ## 测试信息
+        - **创建时间**: $(date)
+        - **测试消息**: ${{ github.event.inputs.test_message }}
+        - **用户**: ${{ steps.test_api.outputs.username }}
+        - **工作流**: ${{ github.workflow }}
+        - **运行ID**: ${{ github.run_id }}
+        
+        ## 测试目的
+        此文件用于验证 GitHub Actions 对 Hugo 仓库的推送权限。
+        
+        ---
+        *此文件由 GitHub Actions 自动生成，用于权限测试*
+        EOF
+        
+        echo "✅ 测试文件已创建: $TEST_FILE"
+        
+        # 检查变更
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "📝 检测到文件变更，准备提交..."
+          
+          git add .
+          git commit -m "🧪 Hugo permissions test: ${{ github.event.inputs.test_message }} ($(date '+%Y-%m-%d %H:%M:%S UTC'))"
+          
+          echo "🚀 推送到 Hugo 仓库..."
+          if git push origin main; then
+            echo "✅ 推送成功！"
+            echo "push_success=true" >> $GITHUB_OUTPUT
+            
+            # 获取提交信息
+            commit_sha=$(git rev-parse HEAD)
+            echo "提交SHA: $commit_sha"
+            echo "commit_sha=$commit_sha" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 推送失败"
+            echo "push_success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        else
+          echo "ℹ️ 没有文件变更"
+          echo "push_success=false" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "================================"
+
+    - name: 清理测试文件 (可选)
+      if: steps.test_push.outputs.push_success == 'true'
+      continue-on-error: true
+      run: |
+        echo "🧹 清理测试文件（可选）"
+        echo "================================"
+        
+        cd hugo-test
+        
+        # 可选：删除测试文件
+        # git rm content/news/hugo-test-*.md
+        # git commit -m "🧹 Clean up test files"
+        # git push origin main
+        
+        echo "ℹ️ 测试文件已保留，可手动删除"
+        echo "测试文件位置: content/news/hugo-test-*.md"
+        echo "================================"
+
+    - name: 测试结果总结
+      if: always()
+      run: |
+        echo "## 📊 Hugo 权限测试结果" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 基本信息" >> $GITHUB_STEP_SUMMARY
+        echo "- **测试时间**: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "- **目标仓库**: hugoflow/producthunt-daily-stack" >> $GITHUB_STEP_SUMMARY
+        echo "- **测试消息**: ${{ github.event.inputs.test_message }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 配置检查" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.check_token.outputs.token_exists }}" == "true" ]; then
+          echo "- ✅ HUGO_PUSH_TOKEN 已配置" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ HUGO_PUSH_TOKEN 未配置" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 权限测试结果" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.test_api.outputs.api_access }}" == "true" ]; then
+          echo "- ✅ API 访问: 成功" >> $GITHUB_STEP_SUMMARY
+          echo "- 👤 用户: ${{ steps.test_api.outputs.username }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.test_api.outputs.push_permission }}" == "true" ]; then
+            echo "- ✅ 推送权限: 有权限" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ 推送权限: 无权限" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "- ❌ API 访问: 失败" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ steps.test_clone.outputs.clone_success }}" == "true" ]; then
+          echo "- ✅ 仓库克隆: 成功" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ 仓库克隆: 失败" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ steps.test_push.outputs.push_success }}" == "true" ]; then
+          echo "- ✅ 文件推送: 成功" >> $GITHUB_STEP_SUMMARY
+          echo "- 📝 提交SHA: ${{ steps.test_push.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ 文件推送: 失败" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "🎉 **总体状态**: Hugo 权限测试成功！可以正常推送到目标仓库。" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **总体状态**: Hugo 权限测试失败，需要检查以下配置：" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🛠️ 解决方案" >> $GITHUB_STEP_SUMMARY
+          echo "1. 确保 HUGO_PUSH_TOKEN 已正确配置" >> $GITHUB_STEP_SUMMARY
+          echo "2. 确保 Token 对应的用户对 hugoflow/producthunt-daily-stack 有写入权限" >> $GITHUB_STEP_SUMMARY
+          echo "3. 检查 Token 是否过期" >> $GITHUB_STEP_SUMMARY
+          echo "4. 联系 hugoflow 组织管理员添加权限" >> $GITHUB_STEP_SUMMARY
+        fi
