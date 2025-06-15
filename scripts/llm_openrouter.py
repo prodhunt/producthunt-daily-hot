@@ -7,8 +7,13 @@ class OpenRouterLLMProvider(BaseLLMProvider):
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324")
-        # 支持自定义API基础URL
-        self.base_url = os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1/chat/completions")
+        # 修复API基础URL配置
+        base_url = os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+        # 确保base_url不为空且有正确的scheme
+        if not base_url or not base_url.startswith(('http://', 'https://')):
+            base_url = "https://openrouter.ai/api/v1"
+        # 构建完整的endpoint URL
+        self.base_url = f"{base_url}/chat/completions"
         if not self.api_key:
             raise ValueError("Missing OPENROUTER_API_KEY in environment variables.")
 

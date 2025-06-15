@@ -8,8 +8,13 @@ class DeepSeekLLMProvider(BaseLLMProvider):
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
         self.model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-        # 支持自定义API基础URL
-        self.base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1/chat/completions")
+        # 修复API基础URL配置
+        self.base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+        # 确保base_url不为空
+        if not self.base_url:
+            self.base_url = "https://api.deepseek.com"
+        # 构建完整的endpoint URL
+        self.endpoint_url = f"{self.base_url}/v1/chat/completions"
         if not self.api_key:
             raise ValueError("Missing DEEPSEEK_API_KEY in environment variables.")
 
@@ -31,8 +36,8 @@ class DeepSeekLLMProvider(BaseLLMProvider):
         # 这样可以确保请求体的编码由requests库正确处理
         json_data = json.dumps(data)
         response = requests.post(
-            self.base_url, 
-            headers=headers, 
+            self.endpoint_url,
+            headers=headers,
             data=json_data.encode('utf-8')
         )
         
