@@ -5,6 +5,10 @@ on:
     - cron: '01 7 * * *'  # 每天UTC时间早上7:01（北京时间下午3:01自动运行）
   workflow_dispatch:  # 手动触发
 
+permissions:
+  contents: write  # 允许推送到仓库
+  actions: write   # 允许触发其他工作流
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -64,16 +68,33 @@ jobs:
         echo "完成时间: $(date)"
         echo "✅ 内容生成完成"
 
-    - name: Commit files
+    - name: Commit and Push changes
       run: |
+        # 配置 Git 用户信息
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git add .
-        git commit -m "Generated daily content" || echo "No changes to commit"
 
-    - name: Push changes
-      run: |
-        git push --force https://${{ secrets.PAT }}@github.com/${{ github.repository_owner }}/producthunt-daily-hot.git HEAD:main
+        # 添加文件
+        git add .
+
+        # 检查是否有变更
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "📝 检测到文件变更，准备提交..."
+          git commit -m "🤖 Auto-generated daily content $(date '+%Y-%m-%d %H:%M:%S UTC')"
+
+          # 推送变更（使用 PAT 或 GITHUB_TOKEN）
+          if [ -n "${{ secrets.PAT }}" ]; then
+            echo "🔑 使用 PAT 推送..."
+            git push https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:main
+          else
+            echo "🔑 使用 GITHUB_TOKEN 推送..."
+            git push https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:main
+          fi
+
+          echo "✅ 成功推送到仓库"
+        else
+          echo "ℹ️ 没有文件变更，跳过提交"
+        fi
 
     - name: 触发 Hugo 发布工作流
       if: success()
