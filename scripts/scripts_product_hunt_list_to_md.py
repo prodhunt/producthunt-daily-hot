@@ -1,5 +1,8 @@
 import sys
 import os
+import json
+import asyncio
+import time
 
 # 添加项目根目录到 sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,8 +19,11 @@ from bs4 import BeautifulSoup
 import pytz
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from concurrent.futures import ThreadPoolExecutor
 
 from scripts.llm_provider import get_llm_provider
+from scripts.image_selector import ProductHuntImageSelector
+
 llm = get_llm_provider()
 
 class Product:
@@ -190,7 +196,7 @@ def fetch_product_hunt_data():
     all_posts = []
     has_next_page = True
     cursor = ""
-    while has_next_page and len(all_posts) < 30:
+    while has_next_page and len(all_posts) < 10:
         query = base_query % (date_str, date_str, cursor)
         try:
             response = session.post(url, headers=headers, json={"query": query})
@@ -203,7 +209,7 @@ def fetch_product_hunt_data():
         all_posts.extend(posts)
         has_next_page = data['pageInfo']['hasNextPage']
         cursor = data['pageInfo']['endCursor']
-    return [Product(**post) for post in sorted(all_posts, key=lambda x: x['votesCount'], reverse=True)[:30]]
+    return [Product(**post) for post in sorted(all_posts, key=lambda x: x['votesCount'], reverse=True)[:10]]
 
 def fetch_mock_data():
     print("使用模拟数据进行测试...")
@@ -247,12 +253,106 @@ def fetch_mock_data():
     ]
     return [Product(**product) for product in mock_products]
 
+def generate_hugo_front_matter(products, date_str):
+    """生成Hugo Front Matter"""
+    try:
+        # 准备产品信息用于标签生成
+        products_info = ""
+        total_votes = 0
+
+        for i, product in enumerate(products[:5], 1):  # 只使用前5个产品
+            total_votes += product.votes_count
+            products_info += f"{i}. {product.name}\n"
+            products_info += f"   - 标语: {product.tagline}\n"
+            products_info += f"   - 描述: {product.description[:100]}...\n"
+            products_info += f"   - 票数: {product.votes_count}\n\n"
+
+        # 生成标签和关键词
+        print("🔄 正在生成Hugo标签和关键词...")
+        tags_result = llm.generate_hugo_tags_and_keywords(products_info)
+
+        # 解析JSON结果
+        try:
+            tags_data = json.loads(tags_result)
+            tags = tags_data.get('tags', ['Product Hunt', '每日热榜', '创新产品'])
+            keywords = tags_data.get('keywords', ['Product Hunt', 'PH热榜', '今日新品'])
+        except json.JSONDecodeError:
+            print("⚠️ 标签生成结果解析失败，使用默认标签")
+            tags = ['Product Hunt', '每日热榜', '创新产品']
+            keywords = ['Product Hunt', 'PH热榜', '今日新品', '创新产品推荐', '科技产品']
+
+        # 选择封面图片
+        image_selector = ProductHuntImageSelector()
+        # 转换产品数据格式
+        products_data = []
+        for product in products:
+            product_dict = {
+                'name': product.name,
+                'tagline': product.tagline,
+                'votesCount': product.votes_count,
+                'media': []
+            }
+            # 如果有图片URL，添加到media中
+            if hasattr(product, 'og_image_url') and product.og_image_url:
+                product_dict['media'] = [{'url': product.og_image_url, 'type': 'image'}]
+            products_data.append(product_dict)
+
+        cover_url, alt_text = image_selector.select_best_cover_image(products_data)
+
+        # 生成标题和描述
+        top_product = products[0] if products else None
+        if top_product:
+            title = f"Product Hunt 今日热榜 {date_str} | {top_product.name}等{len(products)}款创新产品"
+            description = f"今日Product Hunt热榜精选：{top_product.name}、{products[1].name if len(products) > 1 else ''}等{len(products)}款创新产品，总票数{total_votes}票"
+        else:
+            title = f"Product Hunt 今日热榜 {date_str}"
+            description = f"今日Product Hunt热榜精选创新产品推荐"
+
+        # 构建Front Matter
+        front_matter = "---\n"
+        front_matter += f'title: "{title}"\n'
+        front_matter += f'date: {date_str}\n'
+        front_matter += f'description: "{description}"\n'
+        front_matter += f'tags: {json.dumps(tags, ensure_ascii=False)}\n'
+        front_matter += f'keywords: {json.dumps(keywords, ensure_ascii=False)}\n'
+        front_matter += f'votes: {total_votes}\n'
+        if cover_url:
+            front_matter += 'cover:\n'
+            front_matter += f'  image: "{cover_url}"\n'
+            front_matter += f'  alt: "{alt_text}"\n'
+        front_matter += "---\n\n"
+
+        print("✅ Hugo Front Matter生成成功")
+        return front_matter
+
+    except Exception as e:
+        print(f"⚠️ Hugo Front Matter生成失败: {e}")
+        # 返回基础的Front Matter
+        return f"""---
+title: "Product Hunt 今日热榜 {date_str}"
+date: {date_str}
+description: "今日Product Hunt热榜精选创新产品推荐"
+tags: ["Product Hunt", "每日热榜", "创新产品"]
+keywords: ["Product Hunt", "PH热榜", "今日新品", "创新产品推荐", "科技产品"]
+votes: {sum(p.votes_count for p in products) if products else 0}
+---
+
+"""
+
 def generate_markdown(products, date_str):
     today = datetime.now(timezone.utc)
     date_today = today.strftime('%Y-%m-%d')
-    markdown_content = f"# PH今日热榜 | {date_today}\n\n"
+
+    # 生成Hugo Front Matter
+    front_matter = generate_hugo_front_matter(products, date_today)
+
+    # 生成内容
+    markdown_content = front_matter
+    markdown_content += f"# PH今日热榜 | {date_today}\n\n"
+
     for rank, product in enumerate(products, 1):
         markdown_content += product.to_markdown(rank)
+
     os.makedirs('data', exist_ok=True)
     file_name = f"data/producthunt-daily-{date_today}.md"
     with open(file_name, 'w', encoding='utf-8') as file:
@@ -262,12 +362,14 @@ def generate_markdown(products, date_str):
 def main():
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     date_str = yesterday.strftime('%Y-%m-%d')
+
     try:
         products = fetch_product_hunt_data()
     except Exception as e:
         print(f"获取Product Hunt数据失败: {e}")
         print("使用模拟数据继续...")
         products = fetch_mock_data()
+
     generate_markdown(products, date_str)
 
 if __name__ == "__main__":

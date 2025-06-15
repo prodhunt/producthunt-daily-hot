@@ -1,4 +1,5 @@
 import os
+import json
 try:
     from dotenv import load_dotenv
     # 加载 .env 文件
@@ -14,6 +15,10 @@ from bs4 import BeautifulSoup
 import pytz
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+# 导入基类，以便使用提示词常量
+from llm_provider import BaseLLMProvider, get_llm_provider
+# 导入图片选择器
+from image_selector import ProductHuntImageSelector
 
 # 创建 OpenAI 客户端实例
 api_key = os.getenv('OPENAI_API_KEY')
@@ -96,14 +101,18 @@ class Product:
                 words = set((self.name + ", " + self.tagline).replace("&", ",").replace("|", ",").replace("-", ",").split(","))
                 return ", ".join([word.strip() for word in words if word.strip()])
                 
-            prompt = f"根据以下内容生成适合的中文关键词，用英文逗号分隔开：\n\n产品名称：{self.name}\n\n标语：{self.tagline}\n\n描述：{self.description}"
+            prompt = BaseLLMProvider.KEYWORDS_USER_PROMPT_TEMPLATE.format(
+                name=self.name,
+                tagline=self.tagline,
+                description=self.description
+            )
             
             try:
                 print(f"正在为 {self.name} 生成关键词...")
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Generate suitable Chinese keywords based on the product information provided. The keywords should be separated by commas."},
+                        {"role": "system", "content": BaseLLMProvider.KEYWORDS_SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
                     max_tokens=50,
@@ -136,7 +145,7 @@ class Product:
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "你是世界上最专业的翻译工具，擅长英文和中文互译。你是一位精通英文和中文的专业翻译，尤其擅长将IT公司黑话和专业词汇翻译成简洁易懂的地道表达。你的任务是将以下内容翻译成地道的中文，风格与科普杂志或日常对话相似。"},
+                        {"role": "system", "content": BaseLLMProvider.TRANSLATION_SYSTEM_PROMPT},
                         {"role": "user", "content": text},
                     ],
                     max_tokens=500,
@@ -330,13 +339,108 @@ def fetch_mock_data():
     ]
     return [Product(**product) for product in mock_products]
 
+def generate_hugo_front_matter(products, date_str):
+    """生成Hugo Front Matter"""
+    try:
+        # 获取LLM提供商
+        llm_provider = get_llm_provider()
+
+        # 准备产品信息用于标签生成
+        products_info = ""
+        total_votes = 0
+
+        for i, product in enumerate(products[:5], 1):  # 只使用前5个产品
+            total_votes += product.votes_count
+            products_info += f"{i}. {product.name}\n"
+            products_info += f"   - 标语: {product.tagline}\n"
+            products_info += f"   - 描述: {product.description[:100]}...\n"
+            products_info += f"   - 票数: {product.votes_count}\n\n"
+
+        # 生成标签和关键词
+        print("🔄 正在生成Hugo标签和关键词...")
+        tags_result = llm_provider.generate_hugo_tags_and_keywords(products_info)
+
+        # 解析JSON结果
+        try:
+            tags_data = json.loads(tags_result)
+            tags = tags_data.get('tags', ['Product Hunt', '每日热榜', '创新产品'])
+            keywords = tags_data.get('keywords', ['Product Hunt', 'PH热榜', '今日新品'])
+        except json.JSONDecodeError:
+            print("⚠️ 标签生成结果解析失败，使用默认标签")
+            tags = ['Product Hunt', '每日热榜', '创新产品']
+            keywords = ['Product Hunt', 'PH热榜', '今日新品', '创新产品推荐', '科技产品']
+
+        # 选择封面图片
+        image_selector = ProductHuntImageSelector()
+        # 转换产品数据格式
+        products_data = []
+        for product in products:
+            product_dict = {
+                'name': product.name,
+                'tagline': product.tagline,
+                'votesCount': product.votes_count,
+                'media': []
+            }
+            # 如果有图片URL，添加到media中
+            if hasattr(product, 'og_image_url') and product.og_image_url:
+                product_dict['media'] = [{'url': product.og_image_url, 'type': 'image'}]
+            products_data.append(product_dict)
+
+        cover_url, alt_text = image_selector.select_best_cover_image(products_data)
+
+        # 生成标题和描述
+        top_product = products[0] if products else None
+        if top_product:
+            title = f"Product Hunt 今日热榜 {date_str} | {top_product.name}等{len(products)}款创新产品"
+            description = f"今日Product Hunt热榜精选：{top_product.name}、{products[1].name if len(products) > 1 else ''}等{len(products)}款创新产品，总票数{total_votes}票"
+        else:
+            title = f"Product Hunt 今日热榜 {date_str}"
+            description = f"今日Product Hunt热榜精选创新产品推荐"
+
+        # 构建Front Matter
+        front_matter = "---\n"
+        front_matter += f'title: "{title}"\n'
+        front_matter += f'date: {date_str}\n'
+        front_matter += f'description: "{description}"\n'
+        front_matter += f'tags: {json.dumps(tags, ensure_ascii=False)}\n'
+        front_matter += f'keywords: {json.dumps(keywords, ensure_ascii=False)}\n'
+        front_matter += f'votes: {total_votes}\n'
+        if cover_url:
+            front_matter += 'cover:\n'
+            front_matter += f'  image: "{cover_url}"\n'
+            front_matter += f'  alt: "{alt_text}"\n'
+        front_matter += "---\n\n"
+
+        print("✅ Hugo Front Matter生成成功")
+        return front_matter
+
+    except Exception as e:
+        print(f"⚠️ Hugo Front Matter生成失败: {e}")
+        # 返回基础的Front Matter
+        return f"""---
+title: "Product Hunt 今日热榜 {date_str}"
+date: {date_str}
+description: "今日Product Hunt热榜精选创新产品推荐"
+tags: ["Product Hunt", "每日热榜", "创新产品"]
+keywords: ["Product Hunt", "PH热榜", "今日新品", "创新产品推荐", "科技产品"]
+votes: {sum(p.votes_count for p in products) if products else 0}
+---
+
+"""
+
 def generate_markdown(products, date_str):
     """生成Markdown内容并保存到data目录"""
     # 获取今天的日期并格式化
     today = datetime.now(timezone.utc)
     date_today = today.strftime('%Y-%m-%d')
 
-    markdown_content = f"# PH今日热榜 | {date_today}\n\n"
+    # 生成Hugo Front Matter
+    front_matter = generate_hugo_front_matter(products, date_today)
+
+    # 生成内容
+    markdown_content = front_matter
+    markdown_content += f"# PH今日热榜 | {date_today}\n\n"
+
     for rank, product in enumerate(products, 1):
         markdown_content += product.to_markdown(rank)
 
@@ -345,7 +449,7 @@ def generate_markdown(products, date_str):
 
     # 修改文件保存路径到 data 目录
     file_name = f"data/producthunt-daily-{date_today}.md"
-    
+
     # 如果文件存在，直接覆盖
     with open(file_name, 'w', encoding='utf-8') as file:
         file.write(markdown_content)

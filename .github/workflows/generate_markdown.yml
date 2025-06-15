@@ -22,16 +22,47 @@ jobs:
       run: |
         pip install --upgrade pip
         pip install -r requirements.txt
-        pip install openai>=1.0.0 python-dotenv beautifulsoup4 pytz requests
+        pip install openai>=1.0.0 python-dotenv beautifulsoup4 pytz requests google-generativeai
         pip install python-wordpress-xmlrpc
         pip list  # 显示已安装的包及其版本
 
-    - name: Generate Markdown
+    - name: Generate Markdown with Optimizations
       env:
+        # LLM提供商配置
+        LLM_PROVIDER: ${{ secrets.LLM_PROVIDER || 'deepseek' }}
+
+        # OpenAI配置
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o-2024-08-06' }}
+        OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+
+        # Gemini配置
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-2.0-flash' }}
+        GEMINI_API_BASE: ${{ secrets.GEMINI_API_BASE }}
+
+        # DeepSeek配置
+        DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL || 'deepseek-chat' }}
+        DEEPSEEK_API_BASE: ${{ secrets.DEEPSEEK_API_BASE }}
+
+        # OpenRouter配置
+        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'deepseek/deepseek-chat-v3-0324' }}
+        OPENROUTER_API_BASE: ${{ secrets.OPENROUTER_API_BASE }}
+
+        # Product Hunt配置
         PRODUCTHUNT_DEVELOPER_TOKEN: ${{ secrets.PRODUCTHUNT_DEVELOPER_TOKEN }}
       run: |
-        python scripts/product_hunt_list_to_md.py
+        echo "🚀 使用优化版本生成内容..."
+        echo "LLM提供商: $LLM_PROVIDER"
+        echo "开始时间: $(date)"
+
+        # 使用优化后的脚本
+        python scripts/scripts_product_hunt_list_to_md.py
+
+        echo "完成时间: $(date)"
+        echo "✅ 内容生成完成"
 
     - name: Commit files
       run: |
@@ -43,3 +74,61 @@ jobs:
     - name: Push changes
       run: |
         git push --force https://${{ secrets.PAT }}@github.com/${{ github.repository_owner }}/producthunt-daily-hot.git HEAD:main
+
+    - name: 触发 Hugo 发布工作流
+      if: success()
+      run: |
+        echo "🚀 触发 Hugo 发布工作流..."
+
+        curl -X POST \
+          -H "Accept: application/vnd.github.v3+json" \
+          -H "Authorization: token ${{ secrets.PAT }}" \
+          -H "Content-Type: application/json" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d '{
+            "event_type": "content-generated",
+            "client_payload": {
+              "triggered_by": "generate_markdown",
+              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+              "commit_sha": "${{ github.sha }}"
+            }
+          }'
+
+        if [ $? -eq 0 ]; then
+          echo "✅ 成功触发 Hugo 发布工作流"
+        else
+          echo "❌ 触发 Hugo 发布工作流失败"
+          exit 1
+        fi
+
+    - name: 工作流总结
+      if: always()
+      run: |
+        echo "## 📊 优化版内容生成总结" >> $GITHUB_STEP_SUMMARY
+        echo "- **执行时间**: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "- **LLM 提供商**: ${{ env.LLM_PROVIDER }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **触发方式**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **使用脚本**: scripts_product_hunt_list_to_md.py (优化版)" >> $GITHUB_STEP_SUMMARY
+
+        # 检查生成的文件
+        if [ -f "data/producthunt-daily-$(date -u -d '1 day ago' '+%Y-%m-%d').md" ]; then
+          file_size=$(wc -l < "data/producthunt-daily-$(date -u -d '1 day ago' '+%Y-%m-%d').md")
+          echo "- **生成文件**: producthunt-daily-$(date -u -d '1 day ago' '+%Y-%m-%d').md ($file_size 行)" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        # 显示优化功能
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 优化功能" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Hugo Front Matter 自动生成" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 智能标签和关键词生成" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Product Hunt 图片自动选择" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 清洁翻译（无翻译说明）" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 性能优化（10个精选产品）" >> $GITHUB_STEP_SUMMARY
+
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **状态**: 内容生成成功，已触发 Hugo 发布" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **状态**: 内容生成失败" >> $GITHUB_STEP_SUMMARY
+        fi

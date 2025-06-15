@@ -1,22 +1,33 @@
 import os
-import openai
 import requests
 from bs4 import BeautifulSoup
-
 from llm_provider import BaseLLMProvider
 
-class OpenAILLMProvider(BaseLLMProvider):
+class OpenRouterLLMProvider(BaseLLMProvider):
     def __init__(self):
-        self.api_key = os.getenv('OPENAI_API_KEY')
-        self.model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
-        self.api_base = os.getenv('OPENAI_API_BASE')  # 支持自定义API基础URL
-        
-        # 如果设置了自定义API基础URL，则使用它
-        client_kwargs = {"api_key": self.api_key}
-        if self.api_base:
-            client_kwargs["base_url"] = self.api_base
-            
-        self.client = openai.Client(**client_kwargs)
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324")
+        # 支持自定义API基础URL
+        self.base_url = os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1/chat/completions")
+        if not self.api_key:
+            raise ValueError("Missing OPENROUTER_API_KEY in environment variables.")
+
+    def _call_openrouter(self, messages, max_tokens=256, temperature=0.7):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://producthunt-daily-hot.com",
+            "X-Title": "Product Hunt Daily Hot"
+        }
+        data = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+        response = requests.post(self.base_url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
 
     def generate_keywords(self, name, tagline, description):
         prompt = self.KEYWORDS_USER_PROMPT_TEMPLATE.format(
@@ -24,29 +35,18 @@ class OpenAILLMProvider(BaseLLMProvider):
             tagline=tagline,
             description=description
         )
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.KEYWORDS_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=50,
-            temperature=0.7,
-        )
-        keywords = response.choices[0].message.content.strip()
-        return keywords
+        messages = [
+            {"role": "system", "content": self.KEYWORDS_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
+        return self._call_openrouter(messages, max_tokens=50, temperature=0.7)
 
     def translate_text(self, text):
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.TRANSLATION_SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=500,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content.strip()
+        messages = [
+            {"role": "system", "content": self.TRANSLATION_SYSTEM_PROMPT},
+            {"role": "user", "content": text}
+        ]
+        return self._call_openrouter(messages, max_tokens=500, temperature=0.7)
         
     def process_url(self, url):
         """处理URL内容并返回分析结果"""
@@ -74,20 +74,16 @@ class OpenAILLMProvider(BaseLLMProvider):
                 content=content[:3000] + "..."  # 限制内容长度
             )
             
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.WEBPAGE_ANALYSIS_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=500,
-                temperature=0.7,
-            )
+            messages = [
+                {"role": "system", "content": self.WEBPAGE_ANALYSIS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
+            summary = self._call_openrouter(messages, max_tokens=500, temperature=0.7)
             
             return {
                 "url": url,
                 "title": title,
-                "summary": response.choices[0].message.content.strip(),
+                "summary": summary,
                 "status": "success"
             }
             
@@ -105,17 +101,13 @@ class OpenAILLMProvider(BaseLLMProvider):
                 products_info=products_info
             )
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.HUGO_TAGS_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=200,
-                temperature=0.3,  # 降低温度以获得更一致的结果
-            )
+            messages = [
+                {"role": "system", "content": self.HUGO_TAGS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
 
-            return response.choices[0].message.content.strip()
+            result = self._call_openrouter(messages, max_tokens=200, temperature=0.3)
+            return result
 
         except Exception as e:
             print(f"生成Hugo标签失败: {e}")
