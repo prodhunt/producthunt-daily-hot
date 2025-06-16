@@ -114,3 +114,69 @@ Important:
 - keywords should cover the main product categories and features from ALL products
 - All content in Chinese
 - Ensure valid JSON format"""
+
+# 行业背景和趋势分析生成提示词
+INDUSTRY_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的科技行业分析师和SEO内容专家。你的任务是为Product Hunt每日热榜生成行业背景分析和趋势解读，用于SEO优化和用户价值提升。
+
+你需要：
+1. 分析当日产品的行业分布和特点
+2. 识别技术趋势和市场动向
+3. 生成SEO友好的行业背景内容
+4. 自然融入相关关键词
+5. 提供有价值的行业洞察
+
+输出要求：
+- 内容要专业但易懂，适合科技爱好者阅读
+- 自然融入SEO关键词，避免关键词堆砌
+- 包含具体的数据和趋势分析
+- 字数控制在300-500字之间"""
+
+INDUSTRY_ANALYSIS_USER_PROMPT_TEMPLATE = """基于以下Product Hunt今日热榜产品信息，生成一段行业背景分析和趋势解读：
+
+产品列表：
+{products_info}
+
+请分析：
+1. 主要行业类别和分布
+2. 技术趋势和创新方向
+3. 市场热点和用户需求
+4. 与往期对比的变化趋势
+
+生成内容应该：
+- 以"## 🔍 今日科技趋势分析"为标题开始
+- 自然融入相关的SEO关键词
+- 包含具体的产品举例
+- 提供有价值的行业洞察
+- 适合插入到热榜文章的开头部分
+
+请直接输出分析内容，不要包含任何说明或注释。"""
+
+# 产品描述优化提示词
+PRODUCT_DESCRIPTION_ENHANCEMENT_SYSTEM_PROMPT = """你是一个专业的产品文案和SEO优化专家。你的任务是优化Product Hunt产品的中文描述，使其更加SEO友好且具有吸引力。
+
+优化要求：
+1. 保持原意不变，但让表达更加生动有趣
+2. 自然融入相关的行业关键词和长尾关键词
+3. 增加产品的使用场景和价值描述
+4. 提升内容的可读性和搜索友好度
+5. 控制字数在80-150字之间
+
+避免：
+- 关键词堆砌
+- 过度营销化的语言
+- 改变产品的核心功能描述"""
+
+PRODUCT_DESCRIPTION_ENHANCEMENT_USER_PROMPT_TEMPLATE = """请优化以下产品描述，使其更加SEO友好且具有吸引力：
+
+产品名称：{name}
+产品类别：{category}
+原始描述：{description}
+相关关键词：{keywords}
+
+请生成一个优化后的中文产品描述，要求：
+1. 保持原意但表达更生动
+2. 自然融入相关关键词
+3. 突出产品价值和使用场景
+4. 适合中文用户阅读习惯
+
+直接输出优化后的描述，不要包含任何说明。"""

@@ -52,7 +52,7 @@ class OpenRouterLLMProvider(BaseLLMProvider):
             {"role": "user", "content": text}
         ]
         return self._call_openrouter(messages, max_tokens=500, temperature=0.7)
-        
+
     def process_url(self, url):
         """处理URL内容并返回分析结果"""
         try:
@@ -62,36 +62,36 @@ class OpenRouterLLMProvider(BaseLLMProvider):
             }
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
-            
+
             # 使用BeautifulSoup解析HTML
             soup = BeautifulSoup(response.text, 'html.parser')
-            
+
             # 提取标题和正文内容
             title = soup.title.string if soup.title else "无标题"
-            
+
             # 提取正文内容（简单实现，可能需要针对不同网站优化）
             paragraphs = soup.find_all('p')
             content = "\n".join([p.text for p in paragraphs[:10]])  # 限制内容长度
-            
+
             # 使用LLM分析内容
             prompt = self.WEBPAGE_ANALYSIS_USER_PROMPT_TEMPLATE.format(
                 title=title,
                 content=content[:3000] + "..."  # 限制内容长度
             )
-            
+
             messages = [
                 {"role": "system", "content": self.WEBPAGE_ANALYSIS_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
             ]
             summary = self._call_openrouter(messages, max_tokens=500, temperature=0.7)
-            
+
             return {
                 "url": url,
                 "title": title,
                 "summary": summary,
                 "status": "success"
             }
-            
+
         except Exception as e:
             return {
                 "url": url,
@@ -118,3 +118,44 @@ class OpenRouterLLMProvider(BaseLLMProvider):
             print(f"生成Hugo标签失败: {e}")
             # 返回默认标签和关键词
             return '''{"tags": ["Product Hunt", "每日热榜", "创新产品"], "keywords": ["Product Hunt", "PH热榜", "今日新品", "创新产品推荐", "科技产品"]}'''
+
+    def generate_industry_analysis(self, products_info):
+        """生成行业背景分析和趋势解读"""
+        try:
+            prompt = self.INDUSTRY_ANALYSIS_USER_PROMPT_TEMPLATE.format(
+                products_info=products_info
+            )
+
+            messages = [
+                {"role": "system", "content": self.INDUSTRY_ANALYSIS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
+
+            result = self._call_openrouter(messages, max_tokens=800, temperature=0.7)
+            return result
+
+        except Exception as e:
+            print(f"生成行业分析失败: {e}")
+            return "## 🔍 今日科技趋势分析\n\n今日Product Hunt热榜展现了科技产品的多元化发展趋势，涵盖人工智能、生产力工具、开发者工具等多个领域，反映了当前科技创新的活跃态势。"
+
+    def enhance_product_description(self, name, category, description, keywords):
+        """优化产品描述，使其更加SEO友好"""
+        try:
+            prompt = self.PRODUCT_DESCRIPTION_ENHANCEMENT_USER_PROMPT_TEMPLATE.format(
+                name=name,
+                category=category,
+                description=description,
+                keywords=keywords
+            )
+
+            messages = [
+                {"role": "system", "content": self.PRODUCT_DESCRIPTION_ENHANCEMENT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
+
+            result = self._call_openrouter(messages, max_tokens=300, temperature=0.7)
+            return result
+
+        except Exception as e:
+            print(f"优化产品描述失败: {e}")
+            return description  # 返回原始描述
