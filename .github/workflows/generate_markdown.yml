@@ -117,6 +117,13 @@ jobs:
         # 检查是否有变更
         if [ -n "$(git status --porcelain)" ]; then
           echo "📝 检测到文件变更，准备提交..."
+          echo "变更的文件："
+          git status --short
+
+          # 检查生成的文件
+          echo "📋 检查生成的文件："
+          ls -la data/ || echo "data 目录不存在"
+
           git commit -m "🤖 Auto-generated daily content $(date '+%Y-%m-%d %H:%M:%S UTC')"
 
           # 推送变更到内容分支（使用 PAT 或 GITHUB_TOKEN）
@@ -129,8 +136,12 @@ jobs:
           fi
 
           echo "✅ 成功推送到仓库"
+          echo "📋 推送后的 data 目录："
+          ls -la data/ || echo "data 目录不存在"
         else
           echo "ℹ️ 没有文件变更，跳过提交"
+          echo "📋 当前 data 目录状态："
+          ls -la data/ || echo "data 目录不存在"
         fi
 
     - name: 触发 Hugo 发布工作流

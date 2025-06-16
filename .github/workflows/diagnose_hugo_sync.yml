@@ -1,0 +1,192 @@
+name: Diagnose Hugo Sync Issues
+
+on:
+  workflow_dispatch:  # 仅手动触发
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检查 auto-content 分支
+      uses: actions/checkout@v4
+      with:
+        ref: auto-content
+        fetch-depth: 1
+
+    - name: 诊断 auto-content 分支状态
+      run: |
+        echo "## 🔍 auto-content 分支诊断" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 📍 基本信息" >> $GITHUB_STEP_SUMMARY
+        echo "- **当前分支**: $(git branch --show-current)" >> $GITHUB_STEP_SUMMARY
+        echo "- **最新提交**: $(git log -1 --oneline)" >> $GITHUB_STEP_SUMMARY
+        echo "- **提交时间**: $(git log -1 --format='%ci')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 📁 目录结构" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        ls -la >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 📄 data 目录检查" >> $GITHUB_STEP_SUMMARY
+        if [ -d "data" ]; then
+          echo "- ✅ data 目录存在" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -la data/ >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # 检查 MD 文件
+          md_count=$(ls data/*.md 2>/dev/null | wc -l)
+          echo "- **MD 文件数量**: $md_count" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $md_count -gt 0 ]; then
+            echo "- **MD 文件列表**:" >> $GITHUB_STEP_SUMMARY
+            for file in data/*.md; do
+              if [ -f "$file" ]; then
+                size=$(wc -l < "$file")
+                echo "  - $(basename "$file") ($size 行)" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          fi
+        else
+          echo "- ❌ data 目录不存在" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+    - name: 检查 Hugo 仓库访问权限
+      run: |
+        echo "### 🔑 Hugo 仓库权限检查" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -z "${{ secrets.HUGO_PUSH_TOKEN }}" ]; then
+          echo "- ❌ HUGO_PUSH_TOKEN 未配置" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ✅ HUGO_PUSH_TOKEN 已配置" >> $GITHUB_STEP_SUMMARY
+          
+          # 测试仓库访问
+          if curl -s -H "Authorization: token ${{ secrets.HUGO_PUSH_TOKEN }}" \
+                  https://api.github.com/repos/hugoflow/producthunt-daily-stack > /dev/null; then
+            echo "- ✅ 可以访问 Hugo 仓库" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ 无法访问 Hugo 仓库" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+    - name: 模拟 Hugo 发布流程
+      run: |
+        echo "### 🧪 模拟 Hugo 发布流程" >> $GITHUB_STEP_SUMMARY
+        
+        # 检查内容
+        if [ -d "data" ] && [ "$(ls -A data/*.md 2>/dev/null)" ]; then
+          echo "- ✅ 发现待发布的内容文件" >> $GITHUB_STEP_SUMMARY
+          
+          # 模拟检出 Hugo 仓库
+          if [ -n "${{ secrets.HUGO_PUSH_TOKEN }}" ]; then
+            echo "- 🔄 尝试克隆 Hugo 仓库..." >> $GITHUB_STEP_SUMMARY
+            
+            if git clone https://${{ secrets.HUGO_PUSH_TOKEN }}@github.com/hugoflow/producthunt-daily-stack.git hugo-test; then
+              echo "- ✅ Hugo 仓库克隆成功" >> $GITHUB_STEP_SUMMARY
+              
+              # 检查目标目录
+              mkdir -p hugo-test/content/news
+              echo "- ✅ 创建目标目录成功" >> $GITHUB_STEP_SUMMARY
+              
+              # 模拟复制文件
+              if ls data/*.md 1> /dev/null 2>&1; then
+                cp data/*.md hugo-test/content/news/
+                echo "- ✅ 文件复制成功" >> $GITHUB_STEP_SUMMARY
+                echo "- **复制的文件**:" >> $GITHUB_STEP_SUMMARY
+                for file in hugo-test/content/news/*.md; do
+                  if [ -f "$file" ]; then
+                    echo "  - $(basename "$file")" >> $GITHUB_STEP_SUMMARY
+                  fi
+                done
+              else
+                echo "- ❌ 没有找到要复制的文件" >> $GITHUB_STEP_SUMMARY
+              fi
+              
+              # 检查是否有变更
+              cd hugo-test
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              
+              if [ -n "$(git status --porcelain)" ]; then
+                echo "- ✅ 检测到内容变更，可以提交" >> $GITHUB_STEP_SUMMARY
+                echo "- **变更文件**:" >> $GITHUB_STEP_SUMMARY
+                git status --short | while read line; do
+                  echo "  - $line" >> $GITHUB_STEP_SUMMARY
+                done
+              else
+                echo "- ⚠️ 没有检测到内容变更" >> $GITHUB_STEP_SUMMARY
+              fi
+              
+            else
+              echo "- ❌ Hugo 仓库克隆失败" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- ❌ 无法测试，HUGO_PUSH_TOKEN 未配置" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "- ❌ 未发现待发布的内容文件" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+    - name: 检查最近的工作流运行
+      run: |
+        echo "### 📊 最近的工作流运行" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -n "${{ secrets.PAT }}" ]; then
+          echo "- 🔄 获取最近的工作流运行记录..." >> $GITHUB_STEP_SUMMARY
+          
+          # 获取内容生成工作流的最近运行
+          curl -s -H "Authorization: token ${{ secrets.PAT }}" \
+               "https://api.github.com/repos/${{ github.repository }}/actions/workflows/generate_markdown.yml/runs?per_page=3" \
+               > generate_runs.json
+          
+          # 获取 Hugo 发布工作流的最近运行
+          curl -s -H "Authorization: token ${{ secrets.PAT }}" \
+               "https://api.github.com/repos/${{ github.repository }}/actions/workflows/publish-to-hugo.yml/runs?per_page=3" \
+               > hugo_runs.json
+          
+          echo "- **内容生成工作流最近运行**:" >> $GITHUB_STEP_SUMMARY
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '.workflow_runs[] | "  - \(.created_at): \(.conclusion // "running") (\(.html_url))"' generate_runs.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "  - (需要 jq 工具解析 JSON)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "- **Hugo 发布工作流最近运行**:" >> $GITHUB_STEP_SUMMARY
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '.workflow_runs[] | "  - \(.created_at): \(.conclusion // "running") (\(.html_url))"' hugo_runs.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "  - (需要 jq 工具解析 JSON)" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "- ❌ 无法获取工作流运行记录，PAT 未配置" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+    - name: 生成诊断建议
+      run: |
+        echo "### 💡 诊断建议" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "根据以上检查结果，请检查以下可能的问题：" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "1. **内容生成问题**:" >> $GITHUB_STEP_SUMMARY
+        echo "   - 检查内容生成工作流是否成功运行" >> $GITHUB_STEP_SUMMARY
+        echo "   - 确认 auto-content 分支有最新的 MD 文件" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "2. **权限问题**:" >> $GITHUB_STEP_SUMMARY
+        echo "   - 确认 HUGO_PUSH_TOKEN 已正确配置" >> $GITHUB_STEP_SUMMARY
+        echo "   - 确认 Token 对 hugoflow/producthunt-daily-stack 有写入权限" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "3. **工作流触发问题**:" >> $GITHUB_STEP_SUMMARY
+        echo "   - 检查 Hugo 发布工作流是否被正确触发" >> $GITHUB_STEP_SUMMARY
+        echo "   - 确认 repository_dispatch 事件配置正确" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "4. **文件复制问题**:" >> $GITHUB_STEP_SUMMARY
+        echo "   - 检查文件路径和权限" >> $GITHUB_STEP_SUMMARY
+        echo "   - 确认目标目录结构正确" >> $GITHUB_STEP_SUMMARY
