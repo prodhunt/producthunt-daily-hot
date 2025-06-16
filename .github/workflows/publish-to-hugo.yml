@@ -55,13 +55,19 @@ jobs:
       - name: 拷贝 md 文件到 Hugo 仓库
         if: steps.check_content.outputs.has_content == 'true' || github.event.inputs.force_publish == 'true'
         run: |
-          if [ -f data/*.md ]; then
+          echo "📋 检查 data 目录内容："
+          ls -la data/ || echo "data 目录不存在"
+
+          if ls data/*.md 1> /dev/null 2>&1; then
+            echo "📝 找到 MD 文件，开始复制..."
             cp data/*.md hugo-site/content/news/
             echo "✅ 成功复制内容文件到 Hugo 仓库"
             echo "复制的文件："
             ls -la hugo-site/content/news/
           else
-            echo "⚠️ 没有找到要复制的文件"
+            echo "⚠️ 没有找到要复制的 MD 文件"
+            echo "data 目录内容："
+            ls -la data/ 2>/dev/null || echo "data 目录为空或不存在"
           fi
 
       - name: 配置 Git 信息
