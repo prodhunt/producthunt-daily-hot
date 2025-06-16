@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '01 7 * * *'  # 每天UTC时间早上7:01（北京时间下午3:01自动运行）
   workflow_dispatch:  # 手动触发
+    inputs:
+      force_run:
+        description: '强制运行（即使有最近的代码提交）'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write  # 允许推送到仓库
@@ -14,8 +20,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - name: Checkout auto-content branch
+      uses: actions/checkout@v4
+      with:
+        ref: auto-content  # 使用专门的内容分支
+        fetch-depth: 0     # 获取完整历史，以便同步代码
+
+    - name: Sync code from main branch
+      run: |
+        echo "🔄 同步 main 分支的代码到 auto-content 分支..."
+
+        # 配置 Git 用户信息
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        # 获取 main 分支的最新代码
+        git fetch origin main
+
+        # 同步代码文件（不包括 data 目录）
+        git checkout origin/main -- scripts/ || echo "scripts/ 目录不存在或无变更"
+        git checkout origin/main -- .github/ || echo ".github/ 目录不存在或无变更"
+        git checkout origin/main -- requirements.txt || echo "requirements.txt 不存在或无变更"
+        git checkout origin/main -- *.py || echo "Python 文件不存在或无变更"
+        git checkout origin/main -- *.md || echo "Markdown 文件不存在或无变更"
+
+        # 检查是否有代码更改需要提交
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "📝 检测到代码更改，提交同步..."
+          git add .
+          git commit -m "🔄 Auto-sync code from main branch $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "✅ 代码同步完成"
+        else
+          echo "ℹ️ 没有代码更改需要同步"
+        fi
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -82,13 +119,13 @@ jobs:
           echo "📝 检测到文件变更，准备提交..."
           git commit -m "🤖 Auto-generated daily content $(date '+%Y-%m-%d %H:%M:%S UTC')"
 
-          # 推送变更（使用 PAT 或 GITHUB_TOKEN）
+          # 推送变更到内容分支（使用 PAT 或 GITHUB_TOKEN）
           if [ -n "${{ secrets.PAT }}" ]; then
-            echo "🔑 使用 PAT 推送..."
-            git push https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:main
+            echo "🔑 使用 PAT 推送到 auto-content 分支..."
+            git push https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:auto-content
           else
-            echo "🔑 使用 GITHUB_TOKEN 推送..."
-            git push https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:main
+            echo "🔑 使用 GITHUB_TOKEN 推送到 auto-content 分支..."
+            git push https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:auto-content
           fi
 
           echo "✅ 成功推送到仓库"

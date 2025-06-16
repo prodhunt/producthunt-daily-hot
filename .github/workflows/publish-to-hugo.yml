@@ -19,9 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout 当前仓库
+      - name: Checkout 内容分支
         uses: actions/checkout@v4
         with:
+          ref: auto-content  # 从内容分支获取生成的文件
           fetch-depth: 1
 
       - name: 检查是否有内容需要发布
