@@ -34,11 +34,12 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: auto-content  # 使用专门的内容分支
-        fetch-depth: 0     # 获取完整历史，以便同步代码
+        fetch-depth: 0     # 获取完整历史
+        token: ${{ secrets.PAT || github.token }}
 
-    - name: Sync code from main branch
+    - name: Smart sync from main branch
       run: |
-        echo "🔄 同步 main 分支的代码到 auto-content 分支..."
+        echo "🔄 智能同步 main 分支的最新代码..."
 
         # 配置 Git 用户信息
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -47,21 +48,32 @@ jobs:
         # 获取 main 分支的最新代码
         git fetch origin main
 
-        # 同步代码文件（不包括 data 目录）
-        git checkout origin/main -- scripts/ || echo "scripts/ 目录不存在或无变更"
-        git checkout origin/main -- .github/ || echo ".github/ 目录不存在或无变更"
-        git checkout origin/main -- requirements.txt || echo "requirements.txt 不存在或无变更"
-        git checkout origin/main -- *.py || echo "Python 文件不存在或无变更"
-        git checkout origin/main -- *.md || echo "Markdown 文件不存在或无变更"
+        # 检查 main 分支是否有新的提交
+        MAIN_COMMIT=$(git rev-parse origin/main)
+        LAST_SYNC_COMMIT=$(git log --grep="🔄 Auto-sync code from main branch" --format="%H" -1 2>/dev/null || echo "")
 
-        # 检查是否有代码更改需要提交
-        if [ -n "$(git status --porcelain)" ]; then
-          echo "📝 检测到代码更改，提交同步..."
-          git add .
-          git commit -m "🔄 Auto-sync code from main branch $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "✅ 代码同步完成"
+        if [ "$MAIN_COMMIT" != "$LAST_SYNC_COMMIT" ]; then
+          echo "📝 检测到 main 分支有新提交，开始同步..."
+
+          # 只同步代码文件，不同步内容文件
+          git checkout origin/main -- scripts/ 2>/dev/null || echo "scripts/ 无变更"
+          git checkout origin/main -- .github/ 2>/dev/null || echo ".github/ 无变更"
+          git checkout origin/main -- requirements.txt 2>/dev/null || echo "requirements.txt 无变更"
+          git checkout origin/main -- *.py 2>/dev/null || echo "Python 文件无变更"
+
+          # 只同步根目录的 README.md，不同步 data 目录的 md 文件
+          git checkout origin/main -- README.md 2>/dev/null || echo "README.md 无变更"
+
+          # 检查是否有实际变更
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "🔄 Auto-sync code from main branch $(date '+%Y-%m-%d %H:%M:%S UTC') - commit: ${MAIN_COMMIT:0:7}"
+            echo "✅ 代码同步完成"
+          else
+            echo "ℹ️ 没有代码变更需要同步"
+          fi
         else
-          echo "ℹ️ 没有代码更改需要同步"
+          echo "ℹ️ main 分支没有新提交，跳过同步"
         fi
 
     - name: Set up Python
@@ -115,58 +127,28 @@ jobs:
         echo "完成时间: $(date)"
         echo "✅ 内容生成完成"
 
-    - name: Commit and Push changes
+    - name: 检查生成的内容
       run: |
-        # 配置 Git 用户信息
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-
-        # 添加文件
-        git add .
-
-        # 检查是否有变更
-        if [ -n "$(git status --porcelain)" ]; then
-          echo "📝 检测到文件变更，准备提交..."
-          echo "变更的文件："
-          git status --short
-
-          # 检查生成的文件
-          echo "📋 检查生成的文件："
-          ls -la data/ || echo "data 目录不存在"
-
-          git commit -m "🤖 Auto-generated daily content $(date '+%Y-%m-%d %H:%M:%S UTC')"
-
-          # 获取最新的远程更改，避免冲突
-          git fetch origin auto-content 2>/dev/null || echo "auto-content 分支不存在，将创建新分支"
-
-          # 推送变更到内容分支（使用 PAT 或 GITHUB_TOKEN）
-          if [ -n "${{ secrets.PAT }}" ]; then
-            echo "🔑 使用 PAT 推送到 auto-content 分支..."
-            git push --force-with-lease https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:auto-content
-          else
-            echo "🔑 使用 GITHUB_TOKEN 推送到 auto-content 分支..."
-            git push --force-with-lease https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:auto-content
-          fi
-
-          echo "✅ 成功推送到仓库"
-          echo "📋 推送后的 data 目录："
-          ls -la data/ || echo "data 目录不存在"
+        echo "📋 检查生成的内容..."
+        if [ -d "data" ] && [ "$(ls -A data/*.md 2>/dev/null)" ]; then
+          echo "✅ 发现生成的内容文件："
+          ls -la data/
+          echo "CONTENT_GENERATED=true" >> $GITHUB_ENV
         else
-          echo "ℹ️ 没有文件变更，跳过提交"
-          echo "📋 当前 data 目录状态："
-          ls -la data/ || echo "data 目录不存在"
+          echo "ℹ️ 没有发现新的内容文件"
+          echo "CONTENT_GENERATED=false" >> $GITHUB_ENV
         fi
 
-    - name: 同步内容到Hugo仓库
-      if: success()
+    - name: 直接推送内容到Hugo仓库
+      if: env.CONTENT_GENERATED == 'true'
       run: |
-        echo "🚀 同步内容到Hugo仓库..."
+        echo "🚀 直接推送生成的内容到Hugo仓库..."
 
         # 检查是否配置了Hugo仓库
         if [ -z "${{ secrets.HUGO_REPO_URL }}" ]; then
-          echo "⚠️ 未配置HUGO_REPO_URL，跳过同步"
+          echo "❌ 未配置HUGO_REPO_URL"
           echo "请在GitHub Secrets中设置HUGO_REPO_URL（格式：username/repo-name）"
-          exit 0
+          exit 1
         fi
 
         # 配置Git
@@ -177,22 +159,19 @@ jobs:
         echo "📥 克隆Hugo仓库: ${{ secrets.HUGO_REPO_URL }}"
         git clone https://${{ secrets.PAT }}@github.com/${{ secrets.HUGO_REPO_URL }}.git hugo-repo
 
-        # 检查生成的内容
-        echo "📋 检查生成的内容..."
-        if [ ! -d "data" ] || [ -z "$(ls -A data/*.md 2>/dev/null)" ]; then
-          echo "ℹ️ 没有发现新的内容文件，跳过同步"
-          exit 0
-        fi
-
         # 创建Hugo内容目录
         mkdir -p hugo-repo/content/posts
 
-        # 同步内容文件
-        echo "📝 同步内容文件到Hugo仓库..."
+        # 复制生成的内容文件
+        echo "📝 复制生成的内容文件到Hugo仓库..."
         cp data/*.md hugo-repo/content/posts/
 
         # 进入Hugo仓库目录
         cd hugo-repo
+
+        # 显示复制的文件
+        echo "📋 复制的文件："
+        ls -la content/posts/
 
         # 检查是否有变更
         if [ -n "$(git status --porcelain)" ]; then
@@ -200,21 +179,41 @@ jobs:
           echo "变更的文件："
           git status --short
 
-          # 提交变更
+          # 添加所有变更
           git add .
-          git commit -m "🤖 Auto-sync content from content generator $(date '+%Y-%m-%d %H:%M:%S UTC')"
+
+          # 提交变更
+          git commit -m "🤖 Auto-generated Product Hunt daily content $(date '+%Y-%m-%d %H:%M:%S UTC')"
 
           # 获取最新的远程更改，避免冲突
+          echo "🔄 获取最新的远程更改..."
           git fetch origin main
-          git rebase origin/main 2>/dev/null || echo "无需rebase"
 
-          # 推送到Hugo仓库（使用 --force-with-lease 安全推送）
-          git push --force-with-lease origin main
+          # 尝试rebase，如果失败则使用merge
+          if git rebase origin/main; then
+            echo "✅ Rebase 成功"
+          else
+            echo "⚠️ Rebase 失败，尝试 merge..."
+            git rebase --abort
+            git merge origin/main -m "🔄 Merge remote changes"
+          fi
 
-          echo "✅ 成功同步内容到Hugo仓库"
+          # 推送到Hugo仓库
+          echo "🚀 推送到Hugo仓库..."
+          git push origin main
+
+          echo "✅ 成功推送内容到Hugo仓库"
+          echo "🌐 Hugo网站将自动更新"
         else
-          echo "ℹ️ 没有内容变更，跳过同步"
+          echo "ℹ️ 没有内容变更，跳过推送"
         fi
+
+    - name: 清理本地生成的文件
+      if: always()
+      run: |
+        echo "🧹 清理本地生成的文件..."
+        rm -rf data/*.md 2>/dev/null || echo "没有需要清理的文件"
+        echo "✅ 清理完成"
 
     - name: 工作流总结
       if: always()
@@ -240,9 +239,13 @@ jobs:
         echo "- ✅ 清洁翻译（无翻译说明）" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ 性能优化（10个精选产品）" >> $GITHUB_STEP_SUMMARY
 
-        if [ "${{ job.status }}" == "success" ]; then
+        if [ "${{ job.status }}" == "success" ] && [ "${{ env.CONTENT_GENERATED }}" == "true" ]; then
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **状态**: 内容生成成功，已触发 Hugo 发布" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **状态**: 内容生成成功，已直接推送到Hugo仓库" >> $GITHUB_STEP_SUMMARY
+          echo "🌐 **Hugo网站**: 将自动构建和发布" >> $GITHUB_STEP_SUMMARY
+        elif [ "${{ job.status }}" == "success" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ℹ️ **状态**: 工作流运行成功，但没有生成新内容" >> $GITHUB_STEP_SUMMARY
         else
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "❌ **状态**: 内容生成失败" >> $GITHUB_STEP_SUMMARY
