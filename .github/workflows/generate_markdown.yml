@@ -2,11 +2,21 @@ name: Generate Daily Markdown
 
 on:
   schedule:
-    - cron: '01 7 * * *'  # 每天UTC时间早上7:01（北京时间下午3:01自动运行）
-  workflow_dispatch:  # 手动触发
+    - cron: '0 9 * * *'  # 每天UTC时间早上9:00（北京时间下午5:00自动运行）
+  workflow_dispatch:  # 手动触发（用于调试和测试）
     inputs:
+      debug_mode:
+        description: '调试模式（输出更多日志信息）'
+        required: false
+        default: false
+        type: boolean
       force_run:
         description: '强制运行（即使有最近的代码提交）'
+        required: false
+        default: false
+        type: boolean
+      test_mode:
+        description: '测试模式（不提交到仓库）'
         required: false
         default: false
         type: boolean
@@ -126,13 +136,16 @@ jobs:
 
           git commit -m "🤖 Auto-generated daily content $(date '+%Y-%m-%d %H:%M:%S UTC')"
 
+          # 获取最新的远程更改，避免冲突
+          git fetch origin auto-content 2>/dev/null || echo "auto-content 分支不存在，将创建新分支"
+
           # 推送变更到内容分支（使用 PAT 或 GITHUB_TOKEN）
           if [ -n "${{ secrets.PAT }}" ]; then
             echo "🔑 使用 PAT 推送到 auto-content 分支..."
-            git push https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:auto-content
+            git push --force-with-lease https://${{ secrets.PAT }}@github.com/${{ github.repository }}.git HEAD:auto-content
           else
             echo "🔑 使用 GITHUB_TOKEN 推送到 auto-content 分支..."
-            git push https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:auto-content
+            git push --force-with-lease https://${{ github.token }}@github.com/${{ github.repository }}.git HEAD:auto-content
           fi
 
           echo "✅ 成功推送到仓库"
@@ -144,30 +157,63 @@ jobs:
           ls -la data/ || echo "data 目录不存在"
         fi
 
-    - name: 触发 Hugo 发布工作流
+    - name: 同步内容到Hugo仓库
       if: success()
       run: |
-        echo "🚀 触发 Hugo 发布工作流..."
+        echo "🚀 同步内容到Hugo仓库..."
 
-        curl -X POST \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ secrets.PAT }}" \
-          -H "Content-Type: application/json" \
-          https://api.github.com/repos/${{ github.repository }}/dispatches \
-          -d '{
-            "event_type": "content-generated",
-            "client_payload": {
-              "triggered_by": "generate_markdown",
-              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-              "commit_sha": "${{ github.sha }}"
-            }
-          }'
+        # 检查是否配置了Hugo仓库
+        if [ -z "${{ secrets.HUGO_REPO_URL }}" ]; then
+          echo "⚠️ 未配置HUGO_REPO_URL，跳过同步"
+          echo "请在GitHub Secrets中设置HUGO_REPO_URL（格式：username/repo-name）"
+          exit 0
+        fi
 
-        if [ $? -eq 0 ]; then
-          echo "✅ 成功触发 Hugo 发布工作流"
+        # 配置Git
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+        # 克隆Hugo仓库
+        echo "📥 克隆Hugo仓库: ${{ secrets.HUGO_REPO_URL }}"
+        git clone https://${{ secrets.PAT }}@github.com/${{ secrets.HUGO_REPO_URL }}.git hugo-repo
+
+        # 检查生成的内容
+        echo "📋 检查生成的内容..."
+        if [ ! -d "data" ] || [ -z "$(ls -A data/*.md 2>/dev/null)" ]; then
+          echo "ℹ️ 没有发现新的内容文件，跳过同步"
+          exit 0
+        fi
+
+        # 创建Hugo内容目录
+        mkdir -p hugo-repo/content/posts
+
+        # 同步内容文件
+        echo "📝 同步内容文件到Hugo仓库..."
+        cp data/*.md hugo-repo/content/posts/
+
+        # 进入Hugo仓库目录
+        cd hugo-repo
+
+        # 检查是否有变更
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "📝 检测到内容变更，准备提交..."
+          echo "变更的文件："
+          git status --short
+
+          # 提交变更
+          git add .
+          git commit -m "🤖 Auto-sync content from content generator $(date '+%Y-%m-%d %H:%M:%S UTC')"
+
+          # 获取最新的远程更改，避免冲突
+          git fetch origin main
+          git rebase origin/main 2>/dev/null || echo "无需rebase"
+
+          # 推送到Hugo仓库（使用 --force-with-lease 安全推送）
+          git push --force-with-lease origin main
+
+          echo "✅ 成功同步内容到Hugo仓库"
         else
-          echo "❌ 触发 Hugo 发布工作流失败"
-          exit 1
+          echo "ℹ️ 没有内容变更，跳过同步"
         fi
 
     - name: 工作流总结
