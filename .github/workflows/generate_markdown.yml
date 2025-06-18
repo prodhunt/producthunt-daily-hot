@@ -119,18 +119,18 @@ jobs:
         git clone https://${{ secrets.PAT }}@github.com/${{ secrets.HUGO_REPO_URL }}.git hugo-repo
 
         # 创建Hugo内容目录
-        mkdir -p hugo-repo/content/posts
+        mkdir -p hugo-repo/content/news
 
         # 复制生成的内容文件
         echo "📝 复制生成的内容文件到Hugo仓库..."
-        cp data/*.md hugo-repo/content/posts/
+        cp data/*.md hugo-repo/content/news/
 
         # 进入Hugo仓库目录
         cd hugo-repo
 
         # 显示复制的文件
         echo "📋 复制的文件："
-        ls -la content/posts/
+        ls -la content/news/
 
         # 检查是否有变更
         if [ -n "$(git status --porcelain)" ]; then
