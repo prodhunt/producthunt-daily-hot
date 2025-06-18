@@ -279,8 +279,8 @@ OPENROUTER_MODEL=deepseek/deepseek-chat-v3-0324
 
 ### 当前定时设置
 
-- **执行时间**: 每天 UTC 7:01 (北京时间 15:01)
-- **Cron 表达式**: `'1 7 * * *'`
+- **执行时间**: 每天 UTC 9:00 (北京时间 17:00)
+- **Cron 表达式**: `'0 9 * * *'`
 
 ### 自定义执行时间（可选）
 
@@ -288,12 +288,12 @@ OPENROUTER_MODEL=deepseek/deepseek-chat-v3-0324
 
 ```yaml
 schedule:
-  - cron: '1 7 * * *'  # 修改这里
+  - cron: '0 9 * * *'  # 修改这里
 ```
 
 常用时间设置：
 - `'0 8 * * *'` - 每天 UTC 8:00 (北京时间 16:00)
-- `'30 6 * * *'` - 每天 UTC 6:30 (北京时间 14:30)
+- `'0 10 * * *'` - 每天 UTC 10:00 (北京时间 18:00)
 - `'0 0 * * *'` - 每天 UTC 0:00 (北京时间 8:00)
 
 ## 🔧 第六步：故障排除
@@ -314,14 +314,14 @@ schedule:
 
 #### 3. Hugo 仓库推送失败
 ```
-错误：推送到Hugo仓库失败
-解决：检查 HUGO_PUSH_TOKEN 权限和仓库地址
+错误：推送到Hugo仓库失败 (403 Forbidden)
+解决：检查 PAT 权限和 HUGO_REPO_URL 配置
 ```
 
-#### 4. 工作流触发失败
+#### 4. 仓库配置错误
 ```
-错误：触发Hugo发布工作流失败
-解决：检查 PAT 是否有 actions:write 权限
+错误：未配置HUGO_REPO_URL
+解决：在GitHub Secrets中设置HUGO_REPO_URL为 hugoflow/producthunt-daily-stack
 ```
 
 ### 调试命令
@@ -368,22 +368,22 @@ curl -H "Authorization: Bearer YOUR_DEEPSEEK_KEY" \
 ### 部署前检查
 - [ ] Product Hunt Developer Token 已获取
 - [ ] DeepSeek API Key 已获取
-- [ ] GitHub PAT 已创建（repo + actions:write 权限）
-- [ ] Hugo Push Token 已创建（目标仓库写入权限）
+- [ ] GitHub PAT 已创建（对Hugo仓库有完整repo权限）
+- [ ] HUGO_REPO_URL 已设置为 `hugoflow/producthunt-daily-stack`
 - [ ] 所有 Secrets 已在 GitHub 仓库中配置
 
 ### 部署后验证
 - [ ] 手动触发工作流成功执行
 - [ ] 当前仓库生成了 data/producthunt-daily-*.md 文件
-- [ ] Hugo 仓库收到了 content/news/producthunt-daily-*.md 文件
+- [ ] Hugo 仓库收到了 content/posts/producthunt-daily-*.md 文件
 - [ ] 生成的内容包含完整的 Hugo Front Matter
 - [ ] 翻译内容无翻译说明，质量良好
 - [ ] 图片链接有效且已优化
 
 ### 长期运行验证
 - [ ] 定时任务正常执行（等待下一个执行周期）
-- [ ] 链式工作流正常触发
-- [ ] 内容持续更新到 Hugo 仓库
+- [ ] 内容持续直接推送到 Hugo 仓库
+- [ ] Hugo 网站自动更新显示新内容
 
 ---
 
