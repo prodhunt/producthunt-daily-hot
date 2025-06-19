@@ -1,0 +1,195 @@
+name: Manual Generate Content
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: '目标日期 (YYYY-MM-DD)'
+        required: true
+        default: '2025-06-19'
+        type: string
+      force_regenerate:
+        description: '强制重新生成（覆盖现有文件）'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  manual-generate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: main
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Validate date format
+      run: |
+        echo "验证日期格式: ${{ github.event.inputs.target_date }}"
+        if ! date -d "${{ github.event.inputs.target_date }}" >/dev/null 2>&1; then
+          echo "❌ 日期格式错误，请使用 YYYY-MM-DD 格式"
+          exit 1
+        fi
+        echo "✅ 日期格式正确"
+
+    - name: Set environment variables
+      run: |
+        echo "LLM_PROVIDER=${{ vars.LLM_PROVIDER || 'deepseek' }}" >> $GITHUB_ENV
+        echo "TARGET_DATE=${{ github.event.inputs.target_date }}" >> $GITHUB_ENV
+        echo "FORCE_REGENERATE=${{ github.event.inputs.force_regenerate }}" >> $GITHUB_ENV
+
+    - name: Generate content for specific date
+      env:
+        PRODUCTHUNT_DEVELOPER_TOKEN: ${{ secrets.PRODUCTHUNT_DEVELOPER_TOKEN }}
+        DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      run: |
+        echo "🎯 手动生成指定日期内容..."
+        echo "📅 目标日期: ${{ github.event.inputs.target_date }}"
+        echo "🔄 强制重新生成: ${{ github.event.inputs.force_regenerate }}"
+        echo "🤖 LLM提供商: ${{ env.LLM_PROVIDER }}"
+
+        # 检查文件是否已存在
+        target_file="data/producthunt-daily-${{ github.event.inputs.target_date }}.md"
+        if [ -f "$target_file" ] && [ "${{ github.event.inputs.force_regenerate }}" = "false" ]; then
+          echo "⚠️ 文件已存在且未启用强制重新生成，跳过生成"
+          echo "CONTENT_GENERATED=false" >> $GITHUB_ENV
+          exit 0
+        fi
+
+        # 运行手动生成脚本
+        python scripts/manual_generate.py --date "${{ github.event.inputs.target_date }}"
+
+        # 检查生成结果
+        if [ -f "$target_file" ]; then
+          echo "✅ 内容生成成功: $target_file"
+          echo "CONTENT_GENERATED=true" >> $GITHUB_ENV
+
+          # 显示文件信息
+          echo "📄 文件大小: $(wc -c < "$target_file") 字节"
+          echo "📝 文件行数: $(wc -l < "$target_file") 行"
+
+          # 检查votes字段
+          if grep -q "^votes: [0-9]" "$target_file"; then
+            votes=$(grep "^votes: " "$target_file" | cut -d' ' -f2)
+            echo "🎯 票数字段: $votes"
+          else
+            echo "⚠️ 未找到votes字段"
+          fi
+        else
+          echo "❌ 内容生成失败"
+          echo "CONTENT_GENERATED=false" >> $GITHUB_ENV
+          exit 1
+        fi
+
+    - name: 直接推送内容到Hugo仓库
+      if: env.CONTENT_GENERATED == 'true'
+      run: |
+        echo "🚀 推送生成的内容到Hugo仓库..."
+        echo "📅 目标日期: ${{ github.event.inputs.target_date }}"
+
+        # 检查是否配置了Hugo仓库
+        if [ -z "${{ secrets.HUGO_REPO_URL }}" ]; then
+          echo "❌ 未配置HUGO_REPO_URL"
+          echo "请在GitHub Secrets中设置HUGO_REPO_URL（格式：username/repo-name）"
+          exit 1
+        fi
+
+        # 配置Git
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+        # 克隆Hugo仓库
+        echo "📥 克隆Hugo仓库: ${{ secrets.HUGO_REPO_URL }}"
+        git clone https://${{ secrets.PAT }}@github.com/${{ secrets.HUGO_REPO_URL }}.git hugo-repo
+
+        # 创建Hugo内容目录
+        mkdir -p hugo-repo/content/news
+
+        # 复制指定日期的内容文件
+        target_file="producthunt-daily-${{ github.event.inputs.target_date }}.md"
+        echo "📝 复制内容文件: $target_file"
+        cp "data/$target_file" "hugo-repo/content/news/"
+
+        # 进入Hugo仓库目录
+        cd hugo-repo
+
+        # 显示复制的文件
+        echo "📋 复制的文件："
+        ls -la "content/news/$target_file"
+
+        # 检查是否有变更
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "📝 检测到内容变更，准备提交..."
+          echo "变更的文件："
+          git status --short
+
+          # 添加变更
+          git add .
+
+          # 提交变更
+          commit_msg="🔧 Manual regenerate: $target_file ($(date '+%Y-%m-%d %H:%M:%S UTC'))"
+          git commit -m "$commit_msg"
+
+          # 获取最新的远程更改
+          echo "🔄 获取最新的远程更改..."
+          git fetch origin main
+
+          # 尝试rebase
+          if git rebase origin/main; then
+            echo "✅ Rebase 成功"
+          else
+            echo "⚠️ Rebase 失败，尝试 merge..."
+            git rebase --abort
+            git merge origin/main -m "🔄 Merge remote changes"
+          fi
+
+          # 推送到Hugo仓库
+          echo "🚀 推送到Hugo仓库..."
+          git push origin main
+
+          echo "✅ 成功推送内容到Hugo仓库"
+          echo "🌐 Hugo网站将自动更新"
+        else
+          echo "ℹ️ 没有内容变更，跳过推送"
+        fi
+
+    - name: 工作流总结
+      if: always()
+      run: |
+        echo "## 📊 手动内容生成总结" >> $GITHUB_STEP_SUMMARY
+        echo "- **目标日期**: ${{ github.event.inputs.target_date }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **强制重新生成**: ${{ github.event.inputs.force_regenerate }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **LLM 提供商**: ${{ env.LLM_PROVIDER }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **触发用户**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **执行时间**: $(date)" >> $GITHUB_STEP_SUMMARY
+
+        if [ "${{ env.CONTENT_GENERATED }}" = "true" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **状态**: 内容生成成功并推送到Hugo仓库" >> $GITHUB_STEP_SUMMARY
+          echo "📄 **生成文件**: producthunt-daily-${{ github.event.inputs.target_date }}.md" >> $GITHUB_STEP_SUMMARY
+          echo "🎯 **目标仓库**: ${{ secrets.HUGO_REPO_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "📁 **目标路径**: content/news/" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **状态**: 内容生成失败或被跳过" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🎯 使用说明" >> $GITHUB_STEP_SUMMARY
+        echo "- 此工作流用于手动重新生成指定日期的内容" >> $GITHUB_STEP_SUMMARY
+        echo "- 适用于修复缺失数据或重新生成有问题的内容" >> $GITHUB_STEP_SUMMARY
+        echo "- 生成的内容会直接推送到Hugo Stack仓库" >> $GITHUB_STEP_SUMMARY

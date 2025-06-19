@@ -1,8 +1,16 @@
+#!/usr/bin/env python3
+"""
+手动生成指定日期的Product Hunt内容
+用于修复缺失数据或重新生成有问题的内容
+"""
+
 import sys
 import os
 import json
 import asyncio
 import time
+import argparse
+from datetime import datetime, timedelta, timezone
 
 # 添加项目根目录到 sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,7 +22,6 @@ except ImportError:
     print("dotenv 模块未安装，将直接使用环境变量")
 
 import requests
-from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 import pytz
 from requests.adapters import HTTPAdapter
@@ -154,10 +161,13 @@ def get_producthunt_token():
         print(f"获取 Product Hunt 访问令牌时出错: {e}")
         raise Exception(f"Failed to get Product Hunt access token: {e}")
 
-def fetch_product_hunt_data():
+def fetch_product_hunt_data_for_date(target_date):
+    """获取指定日期的Product Hunt数据"""
     token = get_producthunt_token()
-    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-    date_str = yesterday.strftime('%Y-%m-%d')
+    date_str = target_date
+
+    print(f"🎯 获取 {date_str} 的Product Hunt数据...")
+
     url = "https://api.producthunt.com/v2/api/graphql"
     headers = {
         "Accept": "application/json",
@@ -168,6 +178,7 @@ def fetch_product_hunt_data():
         "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
         "Connection": "keep-alive"
     }
+
     retry_strategy = Retry(
         total=3,
         backoff_factor=1,
@@ -176,6 +187,7 @@ def fetch_product_hunt_data():
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session = requests.Session()
     session.mount("https://", adapter)
+
     base_query = """
     {
       posts(order: VOTES, postedAfter: "%sT00:00:00Z", postedBefore: "%sT23:59:59Z", after: "%s") {
@@ -202,9 +214,11 @@ def fetch_product_hunt_data():
       }
     }
     """
+
     all_posts = []
     has_next_page = True
     cursor = ""
+
     while has_next_page and len(all_posts) < 10:
         query = base_query % (date_str, date_str, cursor)
         try:
@@ -213,54 +227,15 @@ def fetch_product_hunt_data():
         except requests.exceptions.RequestException as e:
             print(f"请求失败: {e}")
             raise Exception(f"Failed to fetch data from Product Hunt: {e}")
+
         data = response.json()['data']['posts']
         posts = data['nodes']
         all_posts.extend(posts)
         has_next_page = data['pageInfo']['hasNextPage']
         cursor = data['pageInfo']['endCursor']
-    return [Product(**post) for post in sorted(all_posts, key=lambda x: x['votesCount'], reverse=True)[:10]]
 
-def fetch_mock_data():
-    print("使用模拟数据进行测试...")
-    mock_products = [
-        {
-            "id": "1",
-            "name": "Venice",
-            "tagline": "Private & censorship-resistant AI | Unlock unlimited intelligence",
-            "description": "Venice is a private, censorship-resistant AI platform powered by open-source models and decentralized infrastructure.",
-            "votesCount": 566,
-            "createdAt": "2025-03-07T16:01:00Z",
-            "featuredAt": "2025-03-07T16:01:00Z",
-            "website": "https://www.producthunt.com/r/4D6Z6F7I3SXTGN",
-            "url": "https://www.producthunt.com/posts/venice-3",
-            "media": [
-                {
-                    "url": "https://ph-files.imgix.net/97baee49-6dda-47f5-8a47-91d2c56e1976.jpeg",
-                    "type": "image",
-                    "videoUrl": None
-                }
-            ]
-        },
-        {
-            "id": "2",
-            "name": "Mistral OCR",
-            "tagline": "Introducing the world's most powerful document understanding API",
-            "description": "Mistral OCR—an advanced, lightweight optical character recognition model focused on speed, accuracy, and efficiency.",
-            "votesCount": 477,
-            "createdAt": "2025-03-07T16:01:00Z",
-            "featuredAt": "2025-03-07T16:01:00Z",
-            "website": "https://www.producthunt.com/r/SPXNTAWQSVRLGH",
-            "url": "https://www.producthunt.com/posts/mistral-ocr",
-            "media": [
-                {
-                    "url": "https://ph-files.imgix.net/4224517b-29e4-4944-98c9-2eee59374870.png",
-                    "type": "image",
-                    "videoUrl": None
-                }
-            ]
-        }
-    ]
-    return [Product(**product) for product in mock_products]
+    print(f"✅ 成功获取 {len(all_posts)} 个产品")
+    return [Product(**post) for post in sorted(all_posts, key=lambda x: x['votesCount'], reverse=True)[:10]]
 
 def generate_hugo_front_matter(products, date_str):
     """生成Hugo Front Matter"""
@@ -395,9 +370,6 @@ votes: {sum(p.votes_count for p in products) if products else 0}
 def generate_industry_analysis_content(products):
     """生成行业分析内容"""
     try:
-        # 获取LLM提供商
-        llm = get_llm_provider()
-
         # 准备产品信息用于行业分析
         products_info = ""
         for i, product in enumerate(products[:10], 1):  # 使用所有产品进行分析
@@ -436,12 +408,10 @@ def categorize_product(product):
     else:
         return "其他工具"
 
-def generate_markdown(products, date_str):
-    today = datetime.now(timezone.utc)
-    date_today = today.strftime('%Y-%m-%d')
-
+def generate_markdown_for_date(products, date_str):
+    """为指定日期生成markdown内容"""
     # 生成Hugo Front Matter
-    front_matter = generate_hugo_front_matter(products, date_today)
+    front_matter = generate_hugo_front_matter(products, date_str)
 
     # 生成行业分析内容
     industry_analysis = generate_industry_analysis_content(products)
@@ -457,12 +427,12 @@ def generate_markdown(products, date_str):
 
     if top_product:
         if ai_percentage >= 50:
-            title = f"Product Hunt 今日热榜 {date_today} | AI工具占据{ai_percentage}%份额，{top_product.name}{top_product.votes_count}票领跑"
+            title = f"Product Hunt 今日热榜 {date_str} | AI工具占据{ai_percentage}%份额，{top_product.name}{top_product.votes_count}票领跑"
         else:
-            title = f"Product Hunt 今日热榜 {date_today} | {top_product.name}{top_product.votes_count}票领跑，{len(products)}款创新产品"
+            title = f"Product Hunt 今日热榜 {date_str} | {top_product.name}{top_product.votes_count}票领跑，{len(products)}款创新产品"
 
         second_product = products[1].name if len(products) > 1 else ""
-        description = f"Product Hunt {date_today}热榜深度分析：{top_product.name}获{top_product.votes_count}票领跑"
+        description = f"Product Hunt {date_str}热榜深度分析：{top_product.name}获{top_product.votes_count}票领跑"
         if second_product:
             description += f"，{second_product}等"
         description += f"{len(products)}款创新产品完整解析。总票数{total_votes}票，精选产品{featured_count}款"
@@ -470,7 +440,7 @@ def generate_markdown(products, date_str):
             description += f"，AI工具占据{ai_percentage}%份额"
         description += "。"
     else:
-        title = f"Product Hunt 今日热榜 {date_today}"
+        title = f"Product Hunt 今日热榜 {date_str}"
         description = f"今日Product Hunt热榜精选创新产品推荐"
 
     # 获取封面图片URL
@@ -496,7 +466,7 @@ def generate_markdown(products, date_str):
 <meta property="og:description" content="{safe_description}">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Product Hunt 每日中文热榜">
-<meta property="og:url" content="https://yourdomain.com/news/product-hunt-daily-{date_today}/">'''
+<meta property="og:url" content="https://yourdomain.com/news/product-hunt-daily-{date_str}/">'''
 
     if cover_url:
         seo_tags += f'''
@@ -508,14 +478,14 @@ def generate_markdown(products, date_str):
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Product Hunt 今日热榜 | {len(products)}款创新产品推荐">
-<meta name="twitter:description" content="{top_product.name if top_product else "创新产品"}等热门产品推荐 #ProductHunt #AI #科技">'''
+<meta name="twitter:description" content="{top_product.name if top_product else '创新产品'}等热门产品推荐 #ProductHunt #AI #科技">'''
 
     if cover_url:
         seo_tags += f'''
 <meta name="twitter:image" content="{cover_url}">'''
 
-    seo_tags += f'''
-
+    # JSON-LD 结构化数据
+    json_ld = f'''
 <script type="application/ld+json">
 {{
   "@context": "https://schema.org",
@@ -530,17 +500,17 @@ def generate_markdown(products, date_str):
     "@type": "Organization",
     "name": "Product Hunt Daily"
   }},
-  "datePublished": "{date_today}T00:00:00+08:00",
-  "dateModified": "{date_today}T12:00:00+08:00",
+  "datePublished": "{date_str}T00:00:00+08:00",
+  "dateModified": "{date_str}T12:00:00+08:00",
   "mainEntityOfPage": {{
     "@type": "WebPage",
-    "@id": "https://yourdomain.com/news/product-hunt-daily-{date_today}/"
+    "@id": "https://yourdomain.com/news/product-hunt-daily-{date_str}/"
   }},
   "articleSection": "Technology",
   "wordCount": 2500'''
 
     if cover_url:
-        seo_tags += f''',
+        json_ld += f''',
   "image": {{
     "@type": "ImageObject",
     "url": "{cover_url}",
@@ -548,48 +518,42 @@ def generate_markdown(products, date_str):
     "height": 630
   }}'''
 
-    seo_tags += '''
+    json_ld += '''
 }
-</script>
+</script>'''
 
-'''
+    markdown_content += seo_tags + json_ld + "\n\n"
 
-    markdown_content += seo_tags
-
-    # 优化主标题
+    # 主要内容
     if ai_percentage >= 50:
-        markdown_content += f"# Product Hunt 今日热榜 {date_today}：AI工具占据主导地位\n\n"
+        main_title = f"# Product Hunt 今日热榜 {date_str}：AI工具占据主导地位\n\n"
     else:
-        markdown_content += f"# Product Hunt 今日热榜 {date_today}：{top_product.name if top_product else '创新产品'}领跑科技前沿\n\n"
+        main_title = f"# Product Hunt 今日热榜 {date_str}：创新产品精选\n\n"
 
-    # 添加今日亮点总览
+    markdown_content += main_title
+
+    # 今日亮点总览
     markdown_content += "## 📋 今日亮点总览\n\n"
-    if products:
-        top_3 = products[:3]
-        markdown_content += "### 🏆 热门产品推荐\n"
-        for i, product in enumerate(top_3, 1):
-            rating = "⭐⭐⭐⭐⭐" if product.votes_count >= 300 else "⭐⭐⭐⭐" if product.votes_count >= 200 else "⭐⭐⭐"
-            markdown_content += f"- **[{product.name}](#{i}-{product.name.lower().replace(' ', '-')})** - {product.translated_tagline} ({product.votes_count}票) {rating}\n"
-        markdown_content += "\n"
+    markdown_content += "### 🏆 热门产品推荐\n"
 
-    # 添加数据概览
-    total_votes = sum(p.votes_count for p in products)
-    featured_count = sum(1 for p in products if p.featured == "是")
-    hot_products = sum(1 for p in products if p.votes_count >= 200)
+    # 显示前3个产品
+    for i, product in enumerate(products[:3], 1):
+        stars = "⭐" * min(5, max(1, product.votes_count // 100))
+        markdown_content += f"- **[{product.name}](#{i}-{product.name.lower().replace(' ', '-')})** - {product.translated_tagline} ({product.votes_count}票) {stars}\n"
 
-    markdown_content += "### 📊 数据统计\n"
+    # 数据统计
+    hot_products_count = sum(1 for p in products if p.votes_count >= 200)
+    markdown_content += f"\n### 📊 数据统计\n"
     markdown_content += f"- **总产品数**：{len(products)}款创新产品\n"
     markdown_content += f"- **总票数**：{total_votes:,}票\n"
-    markdown_content += f"- **平均票数**：{total_votes//len(products) if products else 0}票\n"
+    markdown_content += f"- **平均票数**：{total_votes // len(products) if products else 0}票\n"
     markdown_content += f"- **精选产品**：{featured_count}款\n"
-    markdown_content += f"- **热门产品**：{hot_products}款(200+票)\n"
+    markdown_content += f"- **热门产品**：{hot_products_count}款(200+票)\n"
     if ai_percentage > 0:
         markdown_content += f"- **AI工具占比**：{ai_percentage}%\n"
-    markdown_content += "\n"
 
     # 添加行业分析
-    markdown_content += "## 🔍 科技趋势深度分析\n\n"
-    markdown_content += industry_analysis.replace("## 🔍 今日科技趋势分析", "").strip() + "\n\n"
+    markdown_content += f"\n{industry_analysis}\n\n"
 
     # 添加产品详情
     markdown_content += "## 🏆 热门产品详细解析\n\n"
@@ -597,30 +561,73 @@ def generate_markdown(products, date_str):
     for rank, product in enumerate(products, 1):
         markdown_content += product.to_markdown(rank)
 
-    # 确保文件生成到项目根目录的data文件夹
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(project_root, 'data')
-    os.makedirs(data_dir, exist_ok=True)
-
-    file_name = f"producthunt-daily-{date_today}.md"
-    file_path = os.path.join(data_dir, file_name)
-
-    with open(file_path, 'w', encoding='utf-8') as file:
-        file.write(markdown_content)
-    print(f"文件 {file_path} 生成成功并已覆盖。")
+    return markdown_content
 
 def main():
-    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-    date_str = yesterday.strftime('%Y-%m-%d')
+    # 设置命令行参数
+    parser = argparse.ArgumentParser(description='手动生成指定日期的Product Hunt内容')
+    parser.add_argument('--date', type=str, required=True, help='指定日期 (YYYY-MM-DD格式)')
+    args = parser.parse_args()
+
+    # 验证日期格式
+    try:
+        target_datetime = datetime.strptime(args.date, '%Y-%m-%d')
+        date_str = args.date
+        print(f"🎯 手动生成日期: {date_str}")
+    except ValueError:
+        print("❌ 日期格式错误，请使用 YYYY-MM-DD 格式")
+        print("示例: python manual_generate.py --date 2025-06-18")
+        return
 
     try:
-        products = fetch_product_hunt_data()
-    except Exception as e:
-        print(f"获取Product Hunt数据失败: {e}")
-        print("使用模拟数据继续...")
-        products = fetch_mock_data()
+        # 获取指定日期的数据
+        products = fetch_product_hunt_data_for_date(date_str)
 
-    generate_markdown(products, date_str)
+        if not products:
+            print(f"⚠️ 未找到 {date_str} 的产品数据")
+            return
+
+        # 生成markdown内容
+        markdown_content = generate_markdown_for_date(products, date_str)
+
+        # 确保文件生成到项目根目录的data文件夹
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_dir = os.path.join(project_root, 'data')
+        os.makedirs(data_dir, exist_ok=True)
+
+        file_name = f"producthunt-daily-{date_str}.md"
+        file_path = os.path.join(data_dir, file_name)
+
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(markdown_content)
+
+        print(f"✅ 文件 {file_path} 生成成功")
+
+        # 显示生成的文件信息
+        file_size = os.path.getsize(file_path)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            line_count = sum(1 for _ in f)
+
+        print(f"📄 文件大小: {file_size} 字节")
+        print(f"📝 文件行数: {line_count} 行")
+
+        # 检查votes字段
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            if 'votes: ' in content:
+                import re
+                votes_match = re.search(r'votes: (\d+)', content)
+                if votes_match:
+                    print(f"🎯 票数字段: {votes_match.group(1)}")
+                else:
+                    print("⚠️ votes字段格式异常")
+            else:
+                print("❌ 未找到votes字段")
+
+    except Exception as e:
+        print(f"❌ 生成失败: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
